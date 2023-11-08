@@ -50,7 +50,7 @@ input_size = input_sizes[compound_coef] if force_input_size is None else force_i
 ori_imgs, framed_imgs, framed_metas = preprocess(img_path, max_size=input_size)
 
 if use_cuda:
-    x = torch.stack([torch.from_numpy(fi).cuda() for fi in framed_imgs], 0)
+    x = torch.stack([torch.from_numpy(fi) for fi in framed_imgs], 0)
 else:
     x = torch.stack([torch.from_numpy(fi) for fi in framed_imgs], 0)
 
@@ -63,7 +63,7 @@ model.requires_grad_(False)
 model.eval()
 
 if use_cuda:
-    model = model.cuda()
+    model = model
 if use_float16:
     model = model.half()
 
@@ -86,7 +86,7 @@ def display(preds, imgs, imshow=True, imwrite=False):
         imgs[i] = imgs[i].copy()
 
         for j in range(len(preds[i]['rois'])):
-            x1, y1, x2, y2 = preds[i]['rois'][j].astype(np.int)
+            x1, y1, x2, y2 = preds[i]['rois'][j].astype(int)
             obj = obj_list[preds[i]['class_ids'][j]]
             score = float(preds[i]['scores'][j])
             plot_one_box(imgs[i], [x1, y1, x2, y2], label=obj,score=score,color=color_list[get_index_label(obj, obj_list)])
