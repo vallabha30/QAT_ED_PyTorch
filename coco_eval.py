@@ -66,7 +66,7 @@ def evaluate_coco(img_path, set_name, image_ids, coco, model, threshold=0.05):
         x = torch.from_numpy(framed_imgs[0])
 
         if use_cuda:
-            x = x.cuda(gpu)
+            x = x
             if use_float16:
                 x = x.half()
             else:
@@ -151,7 +151,7 @@ if __name__ == '__main__':
         model.eval()
 
         if use_cuda:
-            model.cuda(gpu)
+            model
 
             if use_float16:
                 model.half()
