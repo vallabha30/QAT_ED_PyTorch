@@ -25,6 +25,8 @@ from efficientnet import EfficientNet as EffNet
 from efficientnet.utils import MemoryEfficientSwish, Swish
 from efficientdet.dataset import CocoDataset, Resizer, Normalizer, Augmenter, collater
 from utils.utils import replace_w_sync_bn, CustomDataParallel, get_last_weights, init_weights, boolean_string
+from efficientdet.model import BiFPN, Regressor, QAT_Classifier, EfficientNet
+from efficientdet.utils import Anchors
 
 
 
@@ -47,47 +49,6 @@ torch.manual_seed(191009)
 
 #<---------MODEL ARCHITECTURE----------->
 
-
-class Conv2dStaticSamePadding(nn.Module):
-    """
-    created by Zylo117
-    The real keras/tensorflow conv2d with same padding
-    """
-
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, bias=True, groups=1, dilation=1, **kwargs):
-        super().__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride,
-                              bias=bias, groups=groups)
-        self.stride = self.conv.stride
-        self.kernel_size = self.conv.kernel_size
-        self.dilation = self.conv.dilation
-
-        if isinstance(self.stride, int):
-            self.stride = [self.stride] * 2
-        elif len(self.stride) == 1:
-            self.stride = [self.stride[0]] * 2
-
-        if isinstance(self.kernel_size, int):
-            self.kernel_size = [self.kernel_size] * 2
-        elif len(self.kernel_size) == 1:
-            self.kernel_size = [self.kernel_size[0]] * 2
-
-    def forward(self, x):
-        h, w = x.shape[-2:]
-        
-        extra_h = (math.ceil(w / self.stride[1]) - 1) * self.stride[1] - w + self.kernel_size[1]
-        extra_v = (math.ceil(h / self.stride[0]) - 1) * self.stride[0] - h + self.kernel_size[0]
-        
-        left = extra_h // 2
-        right = extra_h - left
-        top = extra_v // 2
-        bottom = extra_v - top
-
-        x = F.pad(x, [left, right, top, bottom])
-
-        x = self.conv(x)
-        return x
-
 class SeparableConvBlock(nn.Module):
     """
     created by Zylo117
@@ -102,7 +63,7 @@ class SeparableConvBlock(nn.Module):
         #  share bias between depthwise_conv and pointwise_conv
         #  or just pointwise_conv apply bias.
         # A: Confirmed, just pointwise_conv applies bias, depthwise_conv has no bias.
-        
+
         self.depthwise_conv = Conv2dStaticSamePadding(in_channels, in_channels,
                                                       kernel_size=3, stride=1, groups=in_channels, bias=False)
         self.pointwise_conv = Conv2dStaticSamePadding(in_channels, out_channels, kernel_size=1, stride=1)
@@ -115,11 +76,8 @@ class SeparableConvBlock(nn.Module):
         self.activation = activation
         if self.activation:
             self.swish = MemoryEfficientSwish() if not onnx_export else Swish()
-        
-        
 
     def forward(self, x):
-        
         x = self.depthwise_conv(x)
         x = self.pointwise_conv(x)
 
@@ -128,56 +86,110 @@ class SeparableConvBlock(nn.Module):
 
         if self.activation:
             x = self.swish(x)
-        
+
         return x
 
-class QAT_Classifier(nn.Module):
-    """
-    modified by Zylo117
-    """
+class EfficientDetBackbone(nn.Module):
+    def __init__(self, num_classes=80, compound_coef=0, load_weights=False, **kwargs):
+        super(EfficientDetBackbone, self).__init__()
+        self.quant=QuantStub()
+        self.compound_coef = compound_coef
 
-    def __init__(self, in_channels, num_anchors, num_classes, num_layers, pyramid_levels=5, onnx_export=False):
-        super(QAT_Classifier, self).__init__()
-        self.quant = QuantStub()
-        self.num_anchors = num_anchors
+        self.backbone_compound_coef = [0, 1, 2, 3, 4, 5, 6, 6, 7]
+        self.fpn_num_filters = [64, 88, 112, 160, 224, 288, 384, 384, 384]
+        self.fpn_cell_repeats = [3, 4, 5, 6, 7, 7, 8, 8, 8]
+        self.input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
+        self.box_class_repeats = [3, 3, 3, 4, 4, 4, 5, 5, 5]
+        self.pyramid_levels = [5, 5, 5, 5, 5, 5, 5, 5, 6]
+        self.anchor_scale = [4., 4., 4., 4., 4., 4., 4., 5., 4.]
+        self.aspect_ratios = kwargs.get('ratios', [(1.0, 1.0), (1.4, 0.7), (0.7, 1.4)])
+        self.num_scales = len(kwargs.get('scales', [2 ** 0, 2 ** (1.0 / 3.0), 2 ** (2.0 / 3.0)]))
+        conv_channel_coef = {
+            # the channels of P3/P4/P5.
+            0: [40, 112, 320],
+            1: [40, 112, 320],
+            2: [48, 120, 352],
+            3: [48, 136, 384],
+            4: [56, 160, 448],
+            5: [64, 176, 512],
+            6: [72, 200, 576],
+            7: [72, 200, 576],
+            8: [80, 224, 640],
+        }
+
+        num_anchors = len(self.aspect_ratios) * self.num_scales
+
+        self.bifpn = nn.Sequential(
+            *[BiFPN(self.fpn_num_filters[self.compound_coef],
+                    conv_channel_coef[compound_coef],
+                    True if _ == 0 else False,
+                    attention=True if compound_coef < 6 else False,
+                    use_p8=compound_coef > 7)
+              for _ in range(self.fpn_cell_repeats[compound_coef])])
+
         self.num_classes = num_classes
-        self.num_layers = num_layers
-        self.conv_list = nn.ModuleList(
-            [SeparableConvBlock(in_channels, in_channels, norm=False, activation=False) for i in range(num_layers)])
-        self.bn_list = nn.ModuleList(
-            [nn.ModuleList([nn.BatchNorm2d(in_channels, momentum=0.01, eps=1e-3) for i in range(num_layers)]) for j in
-             range(pyramid_levels)])
-        self.header = SeparableConvBlock(in_channels, num_anchors * num_classes, norm=False, activation=False)
-        self.swish = MemoryEfficientSwish() if not onnx_export else Swish()
-        self.dequant = DeQuantStub()
+        self.regressor = Regressor(in_channels=self.fpn_num_filters[self.compound_coef], num_anchors=num_anchors,
+                                   num_layers=self.box_class_repeats[self.compound_coef],
+                                   pyramid_levels=self.pyramid_levels[self.compound_coef])
+        self.classifier = QAT_Classifier(in_channels=self.fpn_num_filters[self.compound_coef], num_anchors=num_anchors,
+                                     num_classes=num_classes,
+                                     num_layers=self.box_class_repeats[self.compound_coef],
+                                     pyramid_levels=self.pyramid_levels[self.compound_coef])
+
+        self.anchors = Anchors(anchor_scale=self.anchor_scale[compound_coef],
+                               pyramid_levels=(torch.arange(self.pyramid_levels[self.compound_coef]) + 3).tolist(),
+                               **kwargs)
+
+        self.backbone_net = EfficientNet(self.backbone_compound_coef[compound_coef], load_weights)
+        self.dequant=DeQuantStub()
+    def freeze_bn(self):
+        for m in self.modules():
+            if isinstance(m, nn.BatchNorm2d):
+                m.eval()
 
     def forward(self, inputs):
-        feats = []
-        for feat, bn_list in zip(inputs, self.bn_list):
-            for i, bn, conv in zip(range(self.num_layers), bn_list, self.conv_list):
-                feat = self.quant(feat)
-                feat = conv(feat)
-                feat = bn(feat)
-                feat = self.swish(feat)
-            feat = self.header(feat)
+        max_size = inputs.shape[-1]
 
-            feat = feat.permute(0, 2, 3, 1)
-            feat = feat.contiguous().view(feat.shape[0], feat.shape[1], feat.shape[2], self.num_anchors,
-                                          self.num_classes)
-            feat = feat.contiguous().view(feat.shape[0], -1, self.num_classes)
-            feat = self.dequant(feat)
+        _, p3, p4, p5 = self.backbone_net(inputs)
 
-            feats.append(feat)
+        features = (p3, p4, p5)
+        features=self.quant(features)
 
-        feats = torch.cat(feats, dim=1)
-        feats = feats.sigmoid()
+        features = self.bifpn(features)
 
-        return feats
-    
-    def fuse_model(self, is_qat=False):
-        fuse_modules = torch.ao.quantization.fuse_modules_qat if is_qat else torch.ao.quantization.fuse_modules
-        for m in self.modules():
-            fuse_modules(QAT_Classifier, [['swish','header']] )
+        regression = self.regressor(features)
+        classification = self.classifier(features)
+        anchors = self.anchors(inputs, inputs.dtype)
+        features=self.dequant(features)
+        return features, regression, classification, anchors
+      
+        
+    def fuse_model(self):
+        fuse_modules = torch.quantization.fuse_modules
+
+        # Fuse BiFPN layers
+        #for m in self.bifpn.modules():
+            #if type(m) == BiFPN:
+                #fuse_modules(m, ['conv', 'bn'], inplace=True)
+
+        # Fuse Regressor layers
+        #for m in self.regressor.modules():
+            #if type(m) == SeparableConvBlock:
+                #fuse_modules(m, ['conv', 'bn'], inplace=True)
+
+        # Fuse QAT_Classifier layers
+        for m in self.classifier.modules():
+            if type(m) == SeparableConvBlock:
+                fuse_modules(m, ['swish', 'header'], inplace=True)
+
+    def init_backbone(self, path):
+        state_dict = torch.load(path)
+        try:
+            ret = self.load_state_dict(state_dict, strict=False)
+            print(ret)
+        except RuntimeError as e:
+            print('Ignoring ' + str(e) + '"')
+
 
 #<---------HELPER FUNCTIONS----------->
 
@@ -241,20 +253,21 @@ def evaluate(model, criterion, data_loader, neval_batches):
 
     return top1, top5
 
+  
 def load_model(model_file):
-    def __init__(self, num_classes=80, compound_coef=0, load_weights=False, **kwargs):
-        super(load_model, self).__init__()
-        self.compound_coef = [0, 1, 2, 3, 4, 5, 6, 6, 7]
-        self.fpn_num_filters = [64, 88, 112, 160, 224, 288, 384, 384, 384]
-        self.fpn_cell_repeats = [3, 4, 5, 6, 7, 7, 8, 8, 8]
-        self.input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
-        self.box_class_repeats = [3, 3, 3, 4, 4, 4, 5, 5, 5]
-        self.pyramid_levels = [5, 5, 5, 5, 5, 5, 5, 5, 6]
-        self.anchor_scale = [4., 4., 4., 4., 4., 4., 4., 5., 4.]
-        self.aspect_ratios = kwargs.get('ratios', [(1.0, 1.0), (1.4, 0.7), (0.7, 1.4)])
-        self.num_scales = len(kwargs.get('scales', [2 ** 0, 2 ** (1.0 / 3.0), 2 ** (2.0 / 3.0)]))
-        
-        conv_channel_coef = {
+    params = yaml.safe_load(open(f'/content/QAT_ED_PyTorch/projects/coco.yml'))
+    obj_list = params['obj_list']
+    compound_coef = [0, 1, 2, 3, 4, 5, 6, 6, 7]
+    fpn_num_filters = [64, 88, 112, 160, 224, 288, 384, 384, 384]
+    fpn_cell_repeats = [3, 4, 5, 6, 7, 7, 8, 8, 8]
+    input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
+    box_class_repeats = [3, 3, 3, 4, 4, 4, 5, 5, 5]
+    pyramid_levels = [5, 5, 5, 5, 5, 5, 5, 5, 6]
+    anchor_scale = [4., 4., 4., 4., 4., 4., 4., 5., 4.]
+    # Define default values directly instead of using kwargs
+    aspect_ratios = [(1.0, 1.0), (1.4, 0.7), (0.7, 1.4)]
+    num_scales = len([2 ** 0, 2 ** (1.0 / 3.0), 2 ** (2.0 / 3.0)])
+    conv_channel_coef = {
             # the channels of P3/P4/P5.
             0: [40, 112, 320],
             1: [40, 112, 320],
@@ -267,15 +280,12 @@ def load_model(model_file):
             8: [80, 224, 640],
         }
 
-        num_anchors = len(self.spect_ratios) * self.num_scales
-        model = QAT_Classifier(in_channels=self.fpn_num_filters[compound_coef], num_anchors=num_anchors,
-                                     num_classes=num_classes,
-                                     num_layers=self.box_class_repeats[compound_coef],
-                                     pyramid_levels=self.pyramid_levels[compound_coef])
-        state_dict = torch.load(model_file)
-        model.load_state_dict(state_dict)
-        model.to('cpu')
-        return model
+    num_anchors = len(aspect_ratios) * num_scales
+    model = EfficientDetBackbone(compound_coef=0, num_classes=len(obj_list),
+                                     ratios=eval(params['anchors_ratios']), scales=eval(params['anchors_scales']))
+    model.load_state_dict(torch.load(model_file, map_location=torch.device('cpu')))
+    model.requires_grad_(False)
+    return model
 
 def print_size_of_model(model):
     torch.save(model.state_dict(), "temp.p")
@@ -294,14 +304,14 @@ class Params:
 
 def prepare_data_loaders(data_path):
     
-    params = Params(f'projects/coco.yml')
-    training_params = {'batch_size': train_batch_size,
+    params = Params(f"/content/QAT_ED_PyTorch/projects/coco.yml")
+    training_params = {'batch_size': 30,
                        'shuffle': True,
                        'drop_last': True,
                        'collate_fn': collater,
                        'num_workers': 2}
 
-    val_params = {'batch_size': eval_batch_size,
+    val_params = {'batch_size': 50,
                   'shuffle': False,
                   'drop_last': True,
                   'collate_fn': collater,
@@ -321,31 +331,31 @@ def prepare_data_loaders(data_path):
 
     return data_loader, data_loader_test
 
-data_path = 'datasets/coco'
-saved_model_dir = 'datasets/'
-float_model_file = 'efficientdet_pretrained_float.pth'
+data_path = 'datasets'
+saved_model_dir = '/content/QAT_ED_PyTorch/weights'
+float_model_file = 'efficientdet-d0.pth'
 scripted_float_model_file = 'efficientdet_quantization_scripted.pth'
 scripted_quantized_model_file = 'efficientdet_quantization_scripted_quantized.pth'
 
-train_batch_size = 30
-eval_batch_size = 50
+#train_batch_size = 30
+#eval_batch_size = 50
 
 data_loader, data_loader_test = prepare_data_loaders(data_path)
 criterion = nn.CrossEntropyLoss()
-float_model = load_model(saved_model_dir + float_model_file)
+float_model = load_model("/content/QAT_ED_PyTorch/weights/efficientdet-d0.pth")
 
 # Next, we'll "fuse modules"; this can both make the model faster by saving on memory access
 # while also improving numerical accuracy. While this can be used with any model, this is
 # especially common with quantized models.
 
-print('\nBefore fusion: \n\n', float_model)
+#print('\nBefore fusion: \n\n', float_model.features[1].conv)
 float_model.eval()
 
 # Fuses modules
 float_model.fuse_model()
 
 # Note fusion of Conv+BN+Relu and Conv+Relu
-print('\nAfter fusion: \n\n',float_model.features[1].conv)
+#print('\nAfter fusion: \n\n',float_model.features[1].conv)
 
 num_eval_batches = 1000
 
