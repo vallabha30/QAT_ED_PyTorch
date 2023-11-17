@@ -299,13 +299,13 @@ def prepare_data_loaders(data_path):
                        'shuffle': True,
                        'drop_last': True,
                        'collate_fn': collater,
-                       'num_workers': 1000}
+                       'num_workers': 2}
 
     val_params = {'batch_size': eval_batch_size,
                   'shuffle': False,
                   'drop_last': True,
                   'collate_fn': collater,
-                  'num_workers': 1000}
+                  'num_workers': 2}
     compound_coef = 0
     input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
     training_set = CocoDataset(root_dir=os.path.join(data_path, params.project_name), set=params.train_set,
