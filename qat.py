@@ -338,14 +338,14 @@ float_model = load_model(saved_model_dir + float_model_file)
 # while also improving numerical accuracy. While this can be used with any model, this is
 # especially common with quantized models.
 
-print('\n Inverted Residual Block: Before fusion \n\n', float_model)
+print('\nBefore fusion: \n\n', float_model)
 float_model.eval()
 
 # Fuses modules
 float_model.fuse_model()
 
 # Note fusion of Conv+BN+Relu and Conv+Relu
-print('\n Inverted Residual Block: After fusion\n\n',float_model)
+print('\nAfter fusion: \n\n',float_model.features[1].conv)
 
 num_eval_batches = 1000
 
