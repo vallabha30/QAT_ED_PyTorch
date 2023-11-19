@@ -1,6 +1,7 @@
 import torch.nn as nn
 import torch
 from torchvision.ops.boxes import nms as nms_torch
+from torch.ao.quantization import QuantStub, DeQuantStub
 
 from efficientnet import EfficientNet as EffNet
 from efficientnet.utils import MemoryEfficientSwish, Swish
@@ -25,7 +26,7 @@ class SeparableConvBlock(nn.Module):
         #  share bias between depthwise_conv and pointwise_conv
         #  or just pointwise_conv apply bias.
         # A: Confirmed, just pointwise_conv applies bias, depthwise_conv has no bias.
-
+        
         self.depthwise_conv = Conv2dStaticSamePadding(in_channels, in_channels,
                                                       kernel_size=3, stride=1, groups=in_channels, bias=False)
         self.pointwise_conv = Conv2dStaticSamePadding(in_channels, out_channels, kernel_size=1, stride=1)
@@ -38,8 +39,11 @@ class SeparableConvBlock(nn.Module):
         self.activation = activation
         if self.activation:
             self.swish = MemoryEfficientSwish() if not onnx_export else Swish()
+        
+        
 
     def forward(self, x):
+        
         x = self.depthwise_conv(x)
         x = self.pointwise_conv(x)
 
@@ -48,10 +52,10 @@ class SeparableConvBlock(nn.Module):
 
         if self.activation:
             x = self.swish(x)
-
+        
         return x
-
-
+    
+    
 class BiFPN(nn.Module):
     """
     modified by Zylo117
@@ -348,6 +352,7 @@ class Regressor(nn.Module):
 
     def __init__(self, in_channels, num_anchors, num_layers, pyramid_levels=5, onnx_export=False):
         super(Regressor, self).__init__()
+        
         self.num_layers = num_layers
 
         self.conv_list = nn.ModuleList(
@@ -357,11 +362,13 @@ class Regressor(nn.Module):
              range(pyramid_levels)])
         self.header = SeparableConvBlock(in_channels, num_anchors * 4, norm=False, activation=False)
         self.swish = MemoryEfficientSwish() if not onnx_export else Swish()
+        
 
     def forward(self, inputs):
         feats = []
         for feat, bn_list in zip(inputs, self.bn_list):
             for i, bn, conv in zip(range(self.num_layers), bn_list, self.conv_list):
+                
                 feat = conv(feat)
                 feat = bn(feat)
                 feat = self.swish(feat)
@@ -369,21 +376,26 @@ class Regressor(nn.Module):
 
             feat = feat.permute(0, 2, 3, 1)
             feat = feat.contiguous().view(feat.shape[0], -1, 4)
+            
 
             feats.append(feat)
 
         feats = torch.cat(feats, dim=1)
+    
+
 
         return feats
+    
 
 
-class Classifier(nn.Module):
+class QAT_Classifier(nn.Module):
     """
     modified by Zylo117
     """
 
     def __init__(self, in_channels, num_anchors, num_classes, num_layers, pyramid_levels=5, onnx_export=False):
-        super(Classifier, self).__init__()
+        super(QAT_Classifier, self).__init__()
+        self.quant = QuantStub()
         self.num_anchors = num_anchors
         self.num_classes = num_classes
         self.num_layers = num_layers
@@ -394,11 +406,13 @@ class Classifier(nn.Module):
              range(pyramid_levels)])
         self.header = SeparableConvBlock(in_channels, num_anchors * num_classes, norm=False, activation=False)
         self.swish = MemoryEfficientSwish() if not onnx_export else Swish()
+        self.dequant = DeQuantStub()
 
     def forward(self, inputs):
         feats = []
         for feat, bn_list in zip(inputs, self.bn_list):
             for i, bn, conv in zip(range(self.num_layers), bn_list, self.conv_list):
+                feat=self.quant(feat)
                 feat = conv(feat)
                 feat = bn(feat)
                 feat = self.swish(feat)
@@ -408,6 +422,7 @@ class Classifier(nn.Module):
             feat = feat.contiguous().view(feat.shape[0], feat.shape[1], feat.shape[2], self.num_anchors,
                                           self.num_classes)
             feat = feat.contiguous().view(feat.shape[0], -1, self.num_classes)
+            feat=self.dequant(feat)
 
             feats.append(feat)
 
@@ -425,17 +440,23 @@ class EfficientNet(nn.Module):
     def __init__(self, compound_coef, load_weights=False):
         super(EfficientNet, self).__init__()
         model = EffNet.from_pretrained(f'efficientnet-b{compound_coef}', load_weights)
+        
         del model._conv_head
         del model._bn1
         del model._avg_pooling
         del model._dropout
         del model._fc
+        
         self.model = model
+        
+
 
     def forward(self, x):
+        
         x = self.model._conv_stem(x)
         x = self.model._bn0(x)
         x = self.model._swish(x)
+        
         feature_maps = []
 
         # TODO: temporarily storing extra tensor last_x and del it later might not be a good idea,
@@ -455,6 +476,8 @@ class EfficientNet(nn.Module):
             last_x = x
         del last_x
         return feature_maps[1:]
+
+    
 
 
 if __name__ == '__main__':
