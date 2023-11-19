@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import numpy as np
+from tqdm.autonotebook import tqdm
 
 import torch
 import torch.nn as nn
@@ -21,15 +22,13 @@ import torch
 from torchvision.ops.boxes import nms as nms_torch
 from torch.ao.quantization import QuantStub, DeQuantStub
 
-from efficientnet import EfficientNet as EffNet
+from efficientnet import EfficientNet 
 from efficientnet.utils import MemoryEfficientSwish, Swish
 from efficientdet.dataset import CocoDataset, Resizer, Normalizer, Augmenter, collater
 from utils.utils import replace_w_sync_bn, CustomDataParallel, get_last_weights, init_weights, boolean_string
 from efficientdet.model import BiFPN, Regressor, QAT_Classifier, EfficientNet
 from efficientdet.utils import Anchors
-
-
-
+from efficientnet.utils_extra import Conv2dStaticSamePadding, MaxPool2dStaticSamePadding
 
 # Set up warnings
 import warnings
@@ -161,7 +160,8 @@ class EfficientDetBackbone(nn.Module):
         classification = self.classifier(features)
         anchors = self.anchors(inputs, inputs.dtype)
         features=self.dequant(features)
-        return features, regression, classification, anchors
+
+        return features , regression, classification, anchors
       
         
     def fuse_model(self):
@@ -239,50 +239,31 @@ def evaluate(model, criterion, data_loader, neval_batches):
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
     cnt = 0
+
     with torch.no_grad():
         for image, target in data_loader:
             output = model(image)
             loss = criterion(output, target)
             cnt += 1
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
-            print('.', end = '')
+            print('.', end='')
             top1.update(acc1[0], image.size(0))
             top5.update(acc5[0], image.size(0))
             if cnt >= neval_batches:
-                 return top1, top5
+                break
 
     return top1, top5
 
+class Params:
+    def __init__(self, project_file):
+        self.params = yaml.safe_load(open(project_file).read())
+
+    def __getattr__(self, item):
+        return self.params.get(item, None)
   
 def load_model(model_file):
-    params = yaml.safe_load(open(f'/content/QAT_ED_PyTorch/projects/coco.yml'))
-    obj_list = params['obj_list']
-    compound_coef = [0, 1, 2, 3, 4, 5, 6, 6, 7]
-    fpn_num_filters = [64, 88, 112, 160, 224, 288, 384, 384, 384]
-    fpn_cell_repeats = [3, 4, 5, 6, 7, 7, 8, 8, 8]
-    input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
-    box_class_repeats = [3, 3, 3, 4, 4, 4, 5, 5, 5]
-    pyramid_levels = [5, 5, 5, 5, 5, 5, 5, 5, 6]
-    anchor_scale = [4., 4., 4., 4., 4., 4., 4., 5., 4.]
-    # Define default values directly instead of using kwargs
-    aspect_ratios = [(1.0, 1.0), (1.4, 0.7), (0.7, 1.4)]
-    num_scales = len([2 ** 0, 2 ** (1.0 / 3.0), 2 ** (2.0 / 3.0)])
-    conv_channel_coef = {
-            # the channels of P3/P4/P5.
-            0: [40, 112, 320],
-            1: [40, 112, 320],
-            2: [48, 120, 352],
-            3: [48, 136, 384],
-            4: [56, 160, 448],
-            5: [64, 176, 512],
-            6: [72, 200, 576],
-            7: [72, 200, 576],
-            8: [80, 224, 640],
-        }
-
-    num_anchors = len(aspect_ratios) * num_scales
-    model = EfficientDetBackbone(compound_coef=0, num_classes=len(obj_list),
-                                     ratios=eval(params['anchors_ratios']), scales=eval(params['anchors_scales']))
+    params = Params(f'projects/coco.yml')
+    model = EfficientDetBackbone(num_classes=len(params.obj_list),compound_coef=0,ratios=eval(params.anchors_ratios), scales=eval(params.anchors_scales))
     model.load_state_dict(torch.load(model_file, map_location=torch.device('cpu')))
     model.requires_grad_(False)
     return model
@@ -294,77 +275,76 @@ def print_size_of_model(model):
 
 
 #<---------DEFINE DATASET AND DATALOADERS----------->
-class Params:
-    def __init__(self, project_file):
-        self.params = yaml.safe_load(open(project_file).read())
-
-    def __getattr__(self, item):
-        return self.params.get(item, None)
 
 
 def prepare_data_loaders(data_path):
-    
-    params = Params(f"/content/QAT_ED_PyTorch/projects/coco.yml")
+    project_name= "coco"  # also the folder name of the dataset that under data_path folder
+    train_set= "train2017"
+    val_set= "val2017"
     training_params = {'batch_size': 30,
                        'shuffle': True,
                        'drop_last': True,
                        'collate_fn': collater,
-                       'num_workers': 2}
+                       'num_workers': 0}
 
     val_params = {'batch_size': 50,
                   'shuffle': False,
                   'drop_last': True,
                   'collate_fn': collater,
-                  'num_workers': 2}
-    compound_coef = 0
-    input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
-    training_set = CocoDataset(root_dir=os.path.join(data_path, params.project_name), set=params.train_set,
-                               transform=transforms.Compose([Normalizer(mean=params.mean, std=params.std),
-                                                             Augmenter(),
-                                                             Resizer(input_sizes[compound_coef])]))
-    data_loader = DataLoader(training_set, **training_params)
+                  'num_workers': 0}
 
-    val_set = CocoDataset(root_dir=os.path.join(data_path, params.project_name), set=params.val_set,
-                          transform=transforms.Compose([Normalizer(mean=params.mean, std=params.std),
-                                                        Resizer(input_sizes[compound_coef])]))
-    data_loader_test = DataLoader(val_set, **val_params)
+    input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
+    compound_coef = 0
+    mean=[0.485, 0.456, 0.406],
+    std=[0.229, 0.224, 0.225]
+    dataset = CocoDataset(data_path, set= train_set, transform=transforms.Compose([Normalizer(mean=mean, std=std),Augmenter(),Resizer(input_sizes[compound_coef])]))
+    dataset_test = CocoDataset(data_path,set=val_set , transform=transforms.Compose([Normalizer(mean=mean, std=std),Resizer(input_sizes[compound_coef])]))
+
+    data_loader = DataLoader(dataset, **training_params)
+
+    data_loader_test = DataLoader(dataset_test, **val_params)
 
     return data_loader, data_loader_test
 
-data_path = 'datasets'
-saved_model_dir = '/content/QAT_ED_PyTorch/weights'
-float_model_file = 'efficientdet-d0.pth'
-scripted_float_model_file = 'efficientdet_quantization_scripted.pth'
-scripted_quantized_model_file = 'efficientdet_quantization_scripted_quantized.pth'
+def main():
 
-#train_batch_size = 30
-#eval_batch_size = 50
+    data_path = 'datasets/coco'
+    saved_model_dir = 'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/weights/'
+    float_model_file = 'efficientdet-d0.pth'
+    scripted_float_model_file = 'efficientdet_quantization_scripted.pth'
+    scripted_quantized_model_file = 'efficientdet_quantization_scripted_quantized.pth'
 
-data_loader, data_loader_test = prepare_data_loaders(data_path)
-criterion = nn.CrossEntropyLoss()
-float_model = load_model("/content/QAT_ED_PyTorch/weights/efficientdet-d0.pth")
 
-# Next, we'll "fuse modules"; this can both make the model faster by saving on memory access
-# while also improving numerical accuracy. While this can be used with any model, this is
-# especially common with quantized models.
 
-#print('\nBefore fusion: \n\n', float_model.features[1].conv)
-float_model.eval()
+    data_loader, data_loader_test = prepare_data_loaders(data_path)
+    criterion = nn.CrossEntropyLoss()
+    float_model = load_model(saved_model_dir+float_model_file).to('cpu')
 
-# Fuses modules
-float_model.fuse_model()
+    # Next, we'll "fuse modules"; this can both make the model faster by saving on memory access
+    # while also improving numerical accuracy. While this can be used with any model, this is
+    # especially common with quantized models.
 
-# Note fusion of Conv+BN+Relu and Conv+Relu
-#print('\nAfter fusion: \n\n',float_model.features[1].conv)
+    #print('\nBefore fusion: \n\n', float_model.features[1].conv)
+    float_model.eval()
 
-num_eval_batches = 1000
+    # Fuses modules
+    float_model.fuse_model()
 
-print("Size of baseline model")
-print_size_of_model(float_model)
+    # Note fusion of Conv+BN+Relu and Conv+Relu
+    #print('\nAfter fusion: \n\n',float_model.features[1].conv)
 
-top1, top5 = evaluate(float_model, criterion, data_loader_test, neval_batches=num_eval_batches)
-print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches * eval_batch_size, top1.avg))
-torch.jit.save(torch.jit.script(float_model), saved_model_dir + scripted_float_model_file)
 
+
+    num_eval_batches = 1000
+
+    print("Size of baseline model")
+    print_size_of_model(float_model)
+
+    top1, top5 = evaluate(float_model, criterion, data_loader, neval_batches=num_eval_batches)
+    print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches * 50, top1.avg))
+    torch.jit.save(torch.jit.script(float_model), saved_model_dir + scripted_float_model_file)
+
+if __name__ == "__main__":
+    main()
 
     
