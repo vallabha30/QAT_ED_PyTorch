@@ -30,6 +30,9 @@ from efficientdet.model import BiFPN, Regressor, QAT_Classifier, EfficientNet
 from efficientdet.utils import Anchors
 from efficientnet.utils_extra import Conv2dStaticSamePadding, MaxPool2dStaticSamePadding
 
+from torchvision.datasets import CocoDetection
+from torch.nn.functional import interpolate
+
 # Set up warnings
 import warnings
 warnings.filterwarnings(
@@ -234,21 +237,44 @@ def accuracy(output, target, topk=(1,)):
         return res
 
 
-def evaluate(model, criterion, data_loader, neval_batches):
+def evaluate(model, criterion, data_path, neval_batches=10, batch_size=32):
     model.eval()
+    
+    # Define data transforms
+    transform = transforms.Compose([
+        transforms.Resize((256, 256)),
+        transforms.ToTensor(),
+        # Add any other necessary transforms
+    ])
+
+    # Load COCO dataset
+    coco_dataset = CocoDetection(root="D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/datasets/coco/val2017", annFile="D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/datasets/coco/annotations/instances_val2017.json", transform=transform)
+    data_loader = DataLoader(coco_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
     cnt = 0
-
     with torch.no_grad():
-        for image, target in data_loader:
-            output = model(image)
-            loss = criterion(output, target)
+        for images, targets in data_loader:
+            # Adjust input size if your model expects a different input size
+            max_size = max(img.shape[-2:] for img in images)
+            images = torch.stack([
+                interpolate(image.unsqueeze(0), size=max_size, mode='bilinear', align_corners=False).squeeze(0)
+                for image in images
+            ])
+            
+            # Move data to device (assuming model is on GPU)
+            images = images.to('cpu')
+            targets = targets.to('cpu')
+
+            output = model(images)
+            loss = criterion(output, targets)
+            
             cnt += 1
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            acc1, acc5 = accuracy(output, targets, topk=(1, 5))
             print('.', end='')
-            top1.update(acc1[0], image.size(0))
-            top5.update(acc5[0], image.size(0))
+            top1.update(acc1[0], images.size(0))
+            top5.update(acc5[0], images.size(0))
             if cnt >= neval_batches:
                 break
 
