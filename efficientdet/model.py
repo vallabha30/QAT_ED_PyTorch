@@ -26,7 +26,7 @@ class SeparableConvBlock(nn.Module):
         #  share bias between depthwise_conv and pointwise_conv
         #  or just pointwise_conv apply bias.
         # A: Confirmed, just pointwise_conv applies bias, depthwise_conv has no bias.
-        
+        self.quant=QuantStub()
         self.depthwise_conv = Conv2dStaticSamePadding(in_channels, in_channels,
                                                       kernel_size=3, stride=1, groups=in_channels, bias=False)
         self.pointwise_conv = Conv2dStaticSamePadding(in_channels, out_channels, kernel_size=1, stride=1)
@@ -39,11 +39,11 @@ class SeparableConvBlock(nn.Module):
         self.activation = activation
         if self.activation:
             self.swish = MemoryEfficientSwish() if not onnx_export else Swish()
-        
+        self.dequant=DeQuantStub()
         
 
     def forward(self, x):
-        
+        x = self.quant(x)
         x = self.depthwise_conv(x)
         x = self.pointwise_conv(x)
 
@@ -52,7 +52,7 @@ class SeparableConvBlock(nn.Module):
 
         if self.activation:
             x = self.swish(x)
-        
+        x=self.dequant(x)
         return x
     
     
@@ -198,8 +198,10 @@ class BiFPN(nn.Module):
     def _forward_fast_attention(self, inputs):
         if self.first_time:
             p3, p4, p5 = inputs
+
             p6_in = self.p5_to_p6(p5)
             p7_in = self.p6_to_p7(p6_in)
+
             p3_in = self.p3_down_channel(p3)
             p4_in = self.p4_down_channel(p4)
             p5_in = self.p5_down_channel(p5)
