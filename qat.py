@@ -3,6 +3,7 @@ import sys
 import time
 import numpy as np
 from tqdm.autonotebook import tqdm
+import argparse
 
 import torch
 import torch.nn as nn
@@ -21,6 +22,10 @@ import torch.nn as nn
 import torch
 from torchvision.ops.boxes import nms as nms_torch
 from torch.ao.quantization import QuantStub, DeQuantStub
+from efficientdet.utils import BBoxTransform, ClipBoxes
+from utils.utils import preprocess, invert_affine, postprocess, boolean_string
+from pycocotools.coco import COCO
+from pycocotools.cocoeval import COCOeval
 
 from efficientnet import EfficientNet 
 from efficientnet.utils import MemoryEfficientSwish, Swish
@@ -150,6 +155,8 @@ class EfficientDetBackbone(nn.Module):
                 m.eval()
 
     def forward(self, inputs):
+        
+
         max_size = inputs.shape[-1]
 
         _, p3, p4, p5 = self.backbone_net(inputs)
@@ -236,49 +243,109 @@ def accuracy(output, target, topk=(1,)):
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
 
+ap = argparse.ArgumentParser()
+ap.add_argument('-p', '--project', type=str, default='coco', help='project file that contains parameters')
+ap.add_argument('-c', '--compound_coef', type=int, default=0, help='coefficients of efficientdet')
+ap.add_argument('-w', '--weights', type=str, default=None, help='/path/to/weights')
+ap.add_argument('--nms_threshold', type=float, default=0.5, help='nms threshold, don\'t change it if not for testing purposes')
+ap.add_argument('--cuda', type=boolean_string, default=True)
+ap.add_argument('--device', type=int, default=0)
+ap.add_argument('--float16', type=boolean_string, default=False)
+ap.add_argument('--override', type=boolean_string, default=True, help='override previous bbox results file if exists')
+args = ap.parse_args()
 
-def evaluate(model, criterion, data_path, neval_batches=10, batch_size=32):
-    model.eval()
-    
-    # Define data transforms
-    transform = transforms.Compose([
-        transforms.Resize((256, 256)),
-        transforms.ToTensor(),
-        # Add any other necessary transforms
-    ])
+compound_coef = args.compound_coef
+nms_threshold = args.nms_threshold
+use_cuda = args.cuda
+gpu = args.device
+use_float16 = args.float16
+override_prev_results = args.override
+project_name = args.project
+weights_path = f'/content/QAT_ED_PyTorch/weights/efficientdet-d0.pth' if args.weights is None else args.weights
 
-    # Load COCO dataset
-    coco_dataset = CocoDetection(root="D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/datasets/coco/val2017", annFile="D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/datasets/coco/annotations/instances_val2017.json", transform=transform)
-    data_loader = DataLoader(coco_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+#print(f'running coco-style evaluation on project {project_name}, weights {weights_path}...')
 
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
-    cnt = 0
-    with torch.no_grad():
-        for images, targets in data_loader:
-            # Adjust input size if your model expects a different input size
-            max_size = max(img.shape[-2:] for img in images)
-            images = torch.stack([
-                interpolate(image.unsqueeze(0), size=max_size, mode='bilinear', align_corners=False).squeeze(0)
-                for image in images
-            ])
-            
-            # Move data to device (assuming model is on GPU)
-            images = images.to('cpu')
-            targets = targets.to('cpu')
+params = yaml.safe_load(open(f'/content/QAT_ED_PyTorch/projects/coco.yml'))
+obj_list = params['obj_list']
 
-            output = model(images)
-            loss = criterion(output, targets)
-            
-            cnt += 1
-            acc1, acc5 = accuracy(output, targets, topk=(1, 5))
-            print('.', end='')
-            top1.update(acc1[0], images.size(0))
-            top5.update(acc5[0], images.size(0))
-            if cnt >= neval_batches:
-                break
+input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
 
-    return top1, top5
+
+def evaluate_coco(img_path, set_name, image_ids, coco, model, threshold=0.05):
+    results = []
+
+    regressBoxes = BBoxTransform()
+    clipBoxes = ClipBoxes()
+
+    for image_id in tqdm(image_ids):
+        image_info = coco.loadImgs(image_id)[0]
+        image_path = img_path + image_info['file_name']
+
+        ori_imgs, framed_imgs, framed_metas = preprocess(image_path, max_size=input_sizes[compound_coef], mean=params['mean'], std=params['std'])
+        x = torch.from_numpy(framed_imgs[0])
+
+        if use_cuda:
+            x = x
+            if use_float16:
+                x = x.half()
+            else:
+                x = x.float()
+        else:
+            x = x.float()
+
+        x = x.unsqueeze(0).permute(0, 3, 1, 2)
+        features, regression, classification, anchors = model(x)
+
+        preds = postprocess(x,
+                            anchors, regression, classification,
+                            regressBoxes, clipBoxes,
+                            threshold, nms_threshold)
+        
+        if not preds:
+            continue
+
+        preds = invert_affine(framed_metas, preds)[0]
+
+        scores = preds['scores']
+        class_ids = preds['class_ids']
+        rois = preds['rois']
+
+        if rois.shape[0] > 0:
+            # x1,y1,x2,y2 -> x1,y1,w,h
+            rois[:, 2] -= rois[:, 0]
+            rois[:, 3] -= rois[:, 1]
+
+            bbox_score = scores
+
+            for roi_id in range(rois.shape[0]):
+                score = float(bbox_score[roi_id])
+                label = int(class_ids[roi_id])
+                box = rois[roi_id, :]
+
+                image_result = {
+                    'image_id': image_id,
+                    'category_id': label + 1,
+                    'score': float(score),
+                    'bbox': box.tolist(),
+                }
+
+                results.append(image_result)
+
+    if not len(results):
+        raise Exception('the model does not provide any valid output, check model architecture and the data input')
+
+def _eval(coco_gt, image_ids, pred_json_path):
+    # load results in COCO evaluation tool
+    coco_pred = coco_gt.loadRes(pred_json_path)
+
+    # run COCO evaluation
+    print('BBox')
+    coco_eval = COCOeval(coco_gt, coco_pred, 'bbox')
+    coco_eval.params.imgIds = image_ids
+    coco_eval.evaluate()
+    coco_eval.accumulate()
+    coco_eval.summarize()
+
 
 class Params:
     def __init__(self, project_file):
@@ -288,7 +355,7 @@ class Params:
         return self.params.get(item, None)
   
 def load_model(model_file):
-    params = Params(f'projects/coco.yml')
+    params = Params(f'/content/QAT_ED_PyTorch/projects/coco.yml')
     model = EfficientDetBackbone(num_classes=len(params.obj_list),compound_coef=0,ratios=eval(params.anchors_ratios), scales=eval(params.anchors_scales))
     model.load_state_dict(torch.load(model_file, map_location=torch.device('cpu')))
     model.requires_grad_(False)
@@ -334,18 +401,27 @@ def prepare_data_loaders(data_path):
 
 def main():
 
-    data_path = 'datasets/coco'
-    saved_model_dir = 'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/weights/'
-    float_model_file = 'efficientdet-d0.pth'
+    data_path = '/content/QAT_ED_PyTorch/datasets/coco'
+    saved_model_dir = '/content/QAT_ED_PyTorch/weights'
+    float_model_file = '/efficientdet-d0.pth'
     scripted_float_model_file = 'efficientdet_quantization_scripted.pth'
     scripted_quantized_model_file = 'efficientdet_quantization_scripted_quantized.pth'
-
-
-
+    SET_NAME = params['val_set']
+    VAL_GT = f'/content/QAT_ED_PyTorch/datasets/coco/annotations/instances_val2017.json'
+    VAL_IMGS = f'/content/QAT_ED_PyTorch/datasets/coco/val2017/'
+    MAX_IMAGES = 10000
+    coco_gt = COCO(VAL_GT)
+    image_ids = coco_gt.getImgIds()[:MAX_IMAGES]
+    
     data_loader, data_loader_test = prepare_data_loaders(data_path)
     criterion = nn.CrossEntropyLoss()
     float_model = load_model(saved_model_dir+float_model_file).to('cpu')
+        
+    if use_cuda:
+      float_model
 
+      if use_float16:
+        float_model.half()
     # Next, we'll "fuse modules"; this can both make the model faster by saving on memory access
     # while also improving numerical accuracy. While this can be used with any model, this is
     # especially common with quantized models.
@@ -366,10 +442,50 @@ def main():
     print("Size of baseline model")
     print_size_of_model(float_model)
 
-    top1, top5 = evaluate(float_model, criterion, data_loader, neval_batches=num_eval_batches)
-    print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches * 50, top1.avg))
-    torch.jit.save(torch.jit.script(float_model), saved_model_dir + scripted_float_model_file)
+    if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
+      evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, float_model)
+    
 
+    _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
+
+    #print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches * 50, top1.avg))
+    torch.jit.save(torch.jit.script(float_model), saved_model_dir + scripted_float_model_file)
+"""
+    num_calibration_batches = 32
+
+    myModel = load_model(saved_model_dir + float_model_file).to('cpu')
+    myModel.eval()
+
+    # Fuse Conv, bn and relu
+    myModel.fuse_model()
+
+    # Specify quantization configuration
+    # Start with simple min/max range estimation and per-tensor quantization of weights
+    myModel.qconfig = torch.ao.quantization.default_qconfig
+    print(myModel.qconfig)
+    torch.ao.quantization.prepare(myModel, inplace=True)
+
+    # Calibrate first
+    #print('Post Training Quantization Prepare: Inserting Observers')
+    #print('\n Inverted Residual Block:After observer insertion \n\n', myModel.features[1].conv)
+
+    # Calibrate with the training set
+    _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
+    print('Post Training Quantization: Calibration done')
+
+    # Convert to quantized model
+    torch.ao.quantization.convert(myModel, inplace=True)
+    #print('Post Training Quantization: Convert done')
+    #print('\n Inverted Residual Block: After fusion and quantization, note fused modules: \n\n',myModel.features[1].conv)
+
+    print("Size of model after quantization")
+    print_size_of_model(myModel)
+
+    #top1, top5 = evaluate(myModel, criterion, data_loader_test, neval_batches=num_eval_batches)
+    #print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches * eval_batch_size, top1.avg))
+
+
+"""
 if __name__ == "__main__":
     main()
 
