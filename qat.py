@@ -10,6 +10,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import math
 import yaml
+import json
 
 from torch import nn
 import torch.nn.functional as F
@@ -56,6 +57,8 @@ torch.manual_seed(191009)
 
 #<---------MODEL ARCHITECTURE----------->
 
+
+
 class SeparableConvBlock(nn.Module):
     """
     created by Zylo117
@@ -70,7 +73,7 @@ class SeparableConvBlock(nn.Module):
         #  share bias between depthwise_conv and pointwise_conv
         #  or just pointwise_conv apply bias.
         # A: Confirmed, just pointwise_conv applies bias, depthwise_conv has no bias.
-
+        self.quant=QuantStub()
         self.depthwise_conv = Conv2dStaticSamePadding(in_channels, in_channels,
                                                       kernel_size=3, stride=1, groups=in_channels, bias=False)
         self.pointwise_conv = Conv2dStaticSamePadding(in_channels, out_channels, kernel_size=1, stride=1)
@@ -83,8 +86,11 @@ class SeparableConvBlock(nn.Module):
         self.activation = activation
         if self.activation:
             self.swish = MemoryEfficientSwish() if not onnx_export else Swish()
+        self.dequant=DeQuantStub()
+        
 
     def forward(self, x):
+        x = self.quant(x)
         x = self.depthwise_conv(x)
         x = self.pointwise_conv(x)
 
@@ -93,7 +99,7 @@ class SeparableConvBlock(nn.Module):
 
         if self.activation:
             x = self.swish(x)
-
+        x=self.dequant(x)
         return x
 
 class EfficientDetBackbone(nn.Module):
@@ -162,14 +168,14 @@ class EfficientDetBackbone(nn.Module):
         _, p3, p4, p5 = self.backbone_net(inputs)
 
         features = (p3, p4, p5)
-        features=self.quant(features)
+        #features=self.quant(features)
 
         features = self.bifpn(features)
 
         regression = self.regressor(features)
         classification = self.classifier(features)
         anchors = self.anchors(inputs, inputs.dtype)
-        features=self.dequant(features)
+        #features=self.dequant(features)
 
         return features , regression, classification, anchors
       
@@ -190,7 +196,7 @@ class EfficientDetBackbone(nn.Module):
         # Fuse QAT_Classifier layers
         for m in self.classifier.modules():
             if type(m) == SeparableConvBlock:
-                fuse_modules(m, ['swish', 'header'], inplace=True)
+                fuse_modules(m, ['depthwise_conv','pointwise_conv','bn','swish'], inplace=True)
 
     def init_backbone(self, path):
         state_dict = torch.load(path)
@@ -261,11 +267,11 @@ gpu = args.device
 use_float16 = args.float16
 override_prev_results = args.override
 project_name = args.project
-weights_path = f'/content/QAT_ED_PyTorch/weights/efficientdet-d0.pth' if args.weights is None else args.weights
+weights_path = f'D:\QAT\EfficientDet\Yet-Another-EfficientDet-Pytorch\weights\efficientdet-d0.pth' if args.weights is None else args.weights
 
 #print(f'running coco-style evaluation on project {project_name}, weights {weights_path}...')
 
-params = yaml.safe_load(open(f'/content/QAT_ED_PyTorch/projects/coco.yml'))
+params = yaml.safe_load(open(f'D:\QAT\EfficientDet\Yet-Another-EfficientDet-Pytorch\projects\coco.yml'))
 obj_list = params['obj_list']
 
 input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
@@ -333,6 +339,11 @@ def evaluate_coco(img_path, set_name, image_ids, coco, model, threshold=0.05):
 
     if not len(results):
         raise Exception('the model does not provide any valid output, check model architecture and the data input')
+    
+    filepath = f'{set_name}_bbox_results.json'
+    if os.path.exists(filepath):
+        os.remove(filepath)
+    json.dump(results, open(filepath, 'w'), indent=4)
 
 def _eval(coco_gt, image_ids, pred_json_path):
     # load results in COCO evaluation tool
@@ -355,7 +366,7 @@ class Params:
         return self.params.get(item, None)
   
 def load_model(model_file):
-    params = Params(f'/content/QAT_ED_PyTorch/projects/coco.yml')
+    params = Params(f'D:\QAT\EfficientDet\Yet-Another-EfficientDet-Pytorch\projects\coco.yml')
     model = EfficientDetBackbone(num_classes=len(params.obj_list),compound_coef=0,ratios=eval(params.anchors_ratios), scales=eval(params.anchors_scales))
     model.load_state_dict(torch.load(model_file, map_location=torch.device('cpu')))
     model.requires_grad_(False)
@@ -401,14 +412,14 @@ def prepare_data_loaders(data_path):
 
 def main():
 
-    data_path = '/content/QAT_ED_PyTorch/datasets/coco'
-    saved_model_dir = '/content/QAT_ED_PyTorch/weights'
+    data_path = 'D:\QAT\EfficientDet\Yet-Another-EfficientDet-Pytorch\datasets\coco'
+    saved_model_dir = 'D:\QAT\EfficientDet\Yet-Another-EfficientDet-Pytorch\weights'
     float_model_file = '/efficientdet-d0.pth'
     scripted_float_model_file = 'efficientdet_quantization_scripted.pth'
     scripted_quantized_model_file = 'efficientdet_quantization_scripted_quantized.pth'
     SET_NAME = params['val_set']
-    VAL_GT = f'/content/QAT_ED_PyTorch/datasets/coco/annotations/instances_val2017.json'
-    VAL_IMGS = f'/content/QAT_ED_PyTorch/datasets/coco/val2017/'
+    VAL_GT = f'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/datasets/coco/annotations/instances_val2017.json'
+    VAL_IMGS = f'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/datasets/coco/val2017/'
     MAX_IMAGES = 10000
     coco_gt = COCO(VAL_GT)
     image_ids = coco_gt.getImgIds()[:MAX_IMAGES]
@@ -449,8 +460,8 @@ def main():
     _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
 
     #print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches * 50, top1.avg))
-    torch.jit.save(torch.jit.script(float_model), saved_model_dir + scripted_float_model_file)
-"""
+    #torch.jit.save(torch.jit.script(float_model), saved_model_dir + scripted_float_model_file)
+
     num_calibration_batches = 32
 
     myModel = load_model(saved_model_dir + float_model_file).to('cpu')
@@ -470,6 +481,10 @@ def main():
     #print('\n Inverted Residual Block:After observer insertion \n\n', myModel.features[1].conv)
 
     # Calibrate with the training set
+    if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
+      evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, myModel)
+    
+
     _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
     print('Post Training Quantization: Calibration done')
 
@@ -485,7 +500,7 @@ def main():
     #print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches * eval_batch_size, top1.avg))
 
 
-"""
+
 if __name__ == "__main__":
     main()
 
