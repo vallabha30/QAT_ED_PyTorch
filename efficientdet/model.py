@@ -17,7 +17,7 @@ class SeparableConvBlock(nn.Module):
     created by Zylo117
     """
 
-    def __init__(self, in_channels, out_channels=None, norm=True, activation=True, onnx_export=False):
+    def __init__(self, in_channels, out_channels=None, norm=True, activation=False, onnx_export=False):
         super(SeparableConvBlock, self).__init__()
         if out_channels is None:
             out_channels = in_channels
