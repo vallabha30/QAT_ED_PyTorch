@@ -17,7 +17,7 @@ class SeparableConvBlock(nn.Module):
     created by Zylo117
     """
 
-    def __init__(self, in_channels, out_channels=None, norm=True, activation=False, onnx_export=False):
+    def __init__(self, in_channels, out_channels=None, norm=True, activation=True, onnx_export=False):
         super(SeparableConvBlock, self).__init__()
         if out_channels is None:
             out_channels = in_channels
@@ -198,10 +198,8 @@ class BiFPN(nn.Module):
     def _forward_fast_attention(self, inputs):
         if self.first_time:
             p3, p4, p5 = inputs
-
             p6_in = self.p5_to_p6(p5)
             p7_in = self.p6_to_p7(p6_in)
-
             p3_in = self.p3_down_channel(p3)
             p4_in = self.p4_down_channel(p4)
             p5_in = self.p5_down_channel(p5)
