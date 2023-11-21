@@ -115,6 +115,7 @@ class Resizer(object):
 
     def __call__(self, sample):
         image, annots = sample['img'], sample['annot']
+        #image= np.squeeze(image)
         height, width, _ = image.shape
         if height > width:
             scale = self.img_size / height
@@ -142,7 +143,7 @@ class Augmenter(object):
         if np.random.rand() < flip_x:
             image, annots = sample['img'], sample['annot']
             image = image[:, ::-1, :]
-
+            #image=np.squeeze(image)
             rows, cols, channels = image.shape
 
             x1 = annots[:, 0].copy()
