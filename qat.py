@@ -453,11 +453,11 @@ def main():
     print("Size of baseline model")
     print_size_of_model(float_model)
 
-    if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
-      evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, float_model)
+    # if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
+    #   evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, float_model)
     
 
-    _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
+    # _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
 
     #print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches * 50, top1.avg))
     #torch.jit.save(torch.jit.script(float_model), saved_model_dir + scripted_float_model_file)
@@ -481,12 +481,12 @@ def main():
     #print('\n Inverted Residual Block:After observer insertion \n\n', myModel.features[1].conv)
 
     # Calibrate with the training set
-    if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
-      evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, myModel)
+    # if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
+    #   evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, myModel)
     
 
-    _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
-    print('Post Training Quantization: Calibration done')
+    # _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
+    # print('Post Training Quantization: Calibration done')
 
     # Convert to quantized model
     torch.ao.quantization.convert(myModel, inplace=True)
