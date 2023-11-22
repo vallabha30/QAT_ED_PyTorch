@@ -267,11 +267,11 @@ gpu = args.device
 use_float16 = args.float16
 override_prev_results = args.override
 project_name = args.project
-weights_path = f'D:\QAT\EfficientDet\Yet-Another-EfficientDet-Pytorch\weights\efficientdet-d0.pth' if args.weights is None else args.weights
+weights_path = f'/content/QAT_ED_PyTorch/weights/efficientdet-d0.pth' if args.weights is None else args.weights
 
 #print(f'running coco-style evaluation on project {project_name}, weights {weights_path}...')
 
-params = yaml.safe_load(open(f'D:\QAT\EfficientDet\Yet-Another-EfficientDet-Pytorch\projects\coco.yml'))
+params = yaml.safe_load(open(f'/content/QAT_ED_PyTorch/projects/coco.yml'))
 obj_list = params['obj_list']
 
 input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
@@ -366,7 +366,7 @@ class Params:
         return self.params.get(item, None)
   
 def load_model(model_file):
-    params = Params(f'D:\QAT\EfficientDet\Yet-Another-EfficientDet-Pytorch\projects\coco.yml')
+    params = Params(f'/content/QAT_ED_PyTorch/projects/coco.yml')
     model = EfficientDetBackbone(num_classes=len(params.obj_list),compound_coef=0,ratios=eval(params.anchors_ratios), scales=eval(params.anchors_scales))
     model.load_state_dict(torch.load(model_file, map_location=torch.device('cpu')))
     model.requires_grad_(False)
@@ -412,14 +412,14 @@ def prepare_data_loaders(data_path):
 
 def main():
 
-    data_path = 'D:\QAT\EfficientDet\Yet-Another-EfficientDet-Pytorch\datasets\coco'
-    saved_model_dir = 'D:\QAT\EfficientDet\Yet-Another-EfficientDet-Pytorch\weights'
+    data_path = '/content/QAT_ED_PyTorch/datasets/coco'
+    saved_model_dir = '/content/QAT_ED_PyTorch/weights'
     float_model_file = '/efficientdet-d0.pth'
     scripted_float_model_file = 'efficientdet_quantization_scripted.pth'
     scripted_quantized_model_file = 'efficientdet_quantization_scripted_quantized.pth'
     SET_NAME = params['val_set']
-    VAL_GT = f'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/datasets/coco/annotations/instances_val2017.json'
-    VAL_IMGS = f'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/datasets/coco/val2017/'
+    VAL_GT = f'/content/QAT_ED_PyTorch/datasets/coco/annotations/instances_val2017.json'
+    VAL_IMGS = f'/content/QAT_ED_PyTorch/datasets/coco/val2017/'
     MAX_IMAGES = 10000
     coco_gt = COCO(VAL_GT)
     image_ids = coco_gt.getImgIds()[:MAX_IMAGES]
