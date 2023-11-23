@@ -209,46 +209,6 @@ class EfficientDetBackbone(nn.Module):
 
 #<---------HELPER FUNCTIONS----------->
 
-class AverageMeter(object):
-    """Computes and stores the average and current value"""
-    def __init__(self, name, fmt=':f'):
-        self.name = name
-        self.fmt = fmt
-        self.reset()
-
-    def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
-        self.count = 0
-
-    def update(self, val, n=1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
-
-    def __str__(self):
-        fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
-        return fmtstr.format(**self.__dict__)
-
-
-def accuracy(output, target, topk=(1,)):
-    """Computes the accuracy over the k top predictions for the specified values of k"""
-    with torch.no_grad():
-        maxk = max(topk)
-        batch_size = target.size(0)
-
-        _, pred = output.topk(maxk, 1, True, True)
-        pred = pred.t()
-        correct = pred.eq(target.view(1, -1).expand_as(pred))
-
-        res = []
-        for k in topk:
-            correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
-            res.append(correct_k.mul_(100.0 / batch_size))
-        return res
-
 ap = argparse.ArgumentParser()
 ap.add_argument('-p', '--project', type=str, default='coco', help='project file that contains parameters')
 ap.add_argument('-c', '--compound_coef', type=int, default=0, help='coefficients of efficientdet')
@@ -268,8 +228,6 @@ use_float16 = args.float16
 override_prev_results = args.override
 project_name = args.project
 weights_path = f'/content/QAT_ED_PyTorch/weights/efficientdet-d0.pth' if args.weights is None else args.weights
-
-#print(f'running coco-style evaluation on project {project_name}, weights {weights_path}...')
 
 params = yaml.safe_load(open(f'/content/QAT_ED_PyTorch/projects/coco.yml'))
 obj_list = params['obj_list']
@@ -381,38 +339,8 @@ def print_size_of_model(model):
 #<---------DEFINE DATASET AND DATALOADERS----------->
 
 
-def prepare_data_loaders(data_path):
-    project_name= "coco"  # also the folder name of the dataset that under data_path folder
-    train_set= "train2017"
-    val_set= "val2017"
-    training_params = {'batch_size': 30,
-                       'shuffle': True,
-                       'drop_last': True,
-                       'collate_fn': collater,
-                       'num_workers': 0}
-
-    val_params = {'batch_size': 50,
-                  'shuffle': False,
-                  'drop_last': True,
-                  'collate_fn': collater,
-                  'num_workers': 0}
-
-    input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
-    compound_coef = 0
-    mean=[0.485, 0.456, 0.406],
-    std=[0.229, 0.224, 0.225]
-    dataset = CocoDataset(data_path, set= train_set, transform=transforms.Compose([Normalizer(mean=mean, std=std),Augmenter(),Resizer(input_sizes[compound_coef])]))
-    dataset_test = CocoDataset(data_path,set=val_set , transform=transforms.Compose([Normalizer(mean=mean, std=std),Resizer(input_sizes[compound_coef])]))
-
-    data_loader = DataLoader(dataset, **training_params)
-
-    data_loader_test = DataLoader(dataset_test, **val_params)
-
-    return data_loader, data_loader_test
-
 def main():
 
-    data_path = '/content/QAT_ED_PyTorch/datasets/coco'
     saved_model_dir = '/content/QAT_ED_PyTorch/weights'
     float_model_file = '/efficientdet-d0.pth'
     scripted_float_model_file = 'efficientdet_quantization_scripted.pth'
@@ -424,7 +352,6 @@ def main():
     coco_gt = COCO(VAL_GT)
     image_ids = coco_gt.getImgIds()[:MAX_IMAGES]
     
-    data_loader, data_loader_test = prepare_data_loaders(data_path)
     criterion = nn.CrossEntropyLoss()
     float_model = load_model(saved_model_dir+float_model_file).to('cpu')
         
@@ -444,10 +371,6 @@ def main():
     float_model.fuse_model()
 
     # Note fusion of Conv+BN+Relu and Conv+Relu
-    #print('\nAfter fusion: \n\n',float_model.features[1].conv)
-
-
-
     num_eval_batches = 1000
 
     print("Size of baseline model")
@@ -496,8 +419,23 @@ def main():
     print("Size of model after quantization")
     print_size_of_model(myModel)
 
-    #top1, top5 = evaluate(myModel, criterion, data_loader_test, neval_batches=num_eval_batches)
-    #print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches * eval_batch_size, top1.avg))
+    # if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
+    #   evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, myModel)
+    
+
+    # _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
+
+    per_channel_quantized_model = load_model(saved_model_dir + float_model_file)
+    per_channel_quantized_model.eval()
+    per_channel_quantized_model.fuse_model()
+# The old 'fbgemm' is still available but 'x86' is the recommended default.
+    per_channel_quantized_model.qconfig = torch.ao.quantization.get_default_qconfig('x86')
+    print(per_channel_quantized_model.qconfig)
+
+    torch.ao.quantization.prepare(per_channel_quantized_model, inplace=True)
+
+    torch.ao.quantization.convert(per_channel_quantized_model, inplace=True)
+    
 
 
 
