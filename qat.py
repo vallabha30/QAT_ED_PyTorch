@@ -248,15 +248,11 @@ def evaluate_coco(img_path, set_name, image_ids, coco, model, threshold=0.05):
         ori_imgs, framed_imgs, framed_metas = preprocess(image_path, max_size=input_sizes[compound_coef], mean=params['mean'], std=params['std'])
         x = torch.from_numpy(framed_imgs[0])
 
-        if use_cuda:
-            x = x
-            if use_float16:
-                x = x.half()
-            else:
-                x = x.float()
+        x = x
+        if use_float16:
+          x = x.half()
         else:
-            x = x.float()
-
+          x = x.float()
         x = x.unsqueeze(0).permute(0, 3, 1, 2)
         features, regression, classification, anchors = model(x)
 
@@ -326,7 +322,7 @@ class Params:
 def load_model(model_file):
     params = Params(f'/content/QAT_ED_PyTorch/projects/coco.yml')
     model = EfficientDetBackbone(num_classes=len(params.obj_list),compound_coef=0,ratios=eval(params.anchors_ratios), scales=eval(params.anchors_scales))
-    model.load_state_dict(torch.load(model_file, map_location=torch.device('cpu')))
+    model.load_state_dict(torch.load(model_file, map_location=torch.device('cuda')))
     model.requires_grad_(False)
     return model
 
@@ -353,13 +349,10 @@ def main():
     image_ids = coco_gt.getImgIds()[:MAX_IMAGES]
     
     criterion = nn.CrossEntropyLoss()
-    float_model = load_model(saved_model_dir+float_model_file).to('cpu')
+    float_model = load_model(saved_model_dir+float_model_file).to('cuda')
         
-    if use_cuda:
-      float_model
-
-      if use_float16:
-        float_model.half()
+    if use_float16:
+      float_model.half()
     # Next, we'll "fuse modules"; this can both make the model faster by saving on memory access
     # while also improving numerical accuracy. While this can be used with any model, this is
     # especially common with quantized models.
@@ -387,7 +380,7 @@ def main():
 
     num_calibration_batches = 32
 
-    myModel = load_model(saved_model_dir + float_model_file).to('cpu')
+    myModel = load_model(saved_model_dir + float_model_file).to('cuda')
     myModel.eval()
 
     # Fuse Conv, bn and relu
@@ -419,11 +412,11 @@ def main():
     print("Size of model after quantization")
     print_size_of_model(myModel)
 
-    # if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
-    #   evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, myModel)
+    if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
+      evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, myModel)
     
 
-    # _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
+    _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
 
     per_channel_quantized_model = load_model(saved_model_dir + float_model_file)
     per_channel_quantized_model.eval()
