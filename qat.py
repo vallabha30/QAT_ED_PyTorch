@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import numpy as np
+from torch.serialization import MAP_LOCATION
 from tqdm.autonotebook import tqdm
 import argparse
 
@@ -247,8 +248,8 @@ def evaluate_coco(img_path, set_name, image_ids, coco, model, threshold=0.05):
 
         ori_imgs, framed_imgs, framed_metas = preprocess(image_path, max_size=input_sizes[compound_coef], mean=params['mean'], std=params['std'])
         x = torch.from_numpy(framed_imgs[0])
-
-        x = x
+        # if use_cuda:
+        #   x = x.cuda()
         if use_float16:
           x = x.half()
         else:
@@ -322,7 +323,7 @@ class Params:
 def load_model(model_file):
     params = Params(f'/content/QAT_ED_PyTorch/projects/coco.yml')
     model = EfficientDetBackbone(num_classes=len(params.obj_list),compound_coef=0,ratios=eval(params.anchors_ratios), scales=eval(params.anchors_scales))
-    model.load_state_dict(torch.load(model_file, map_location=torch.device('cuda')))
+    model.load_state_dict(torch.load(model_file, map_location=torch.device('cpu')))
     model.requires_grad_(False)
     return model
 
@@ -349,8 +350,9 @@ def main():
     image_ids = coco_gt.getImgIds()[:MAX_IMAGES]
     
     criterion = nn.CrossEntropyLoss()
-    float_model = load_model(saved_model_dir+float_model_file).to('cuda')
-        
+    float_model = load_model(saved_model_dir+float_model_file)
+    # if use_cuda:
+    #   float_model.cuda()    
     if use_float16:
       float_model.half()
     # Next, we'll "fuse modules"; this can both make the model faster by saving on memory access
@@ -380,7 +382,7 @@ def main():
 
     num_calibration_batches = 32
 
-    myModel = load_model(saved_model_dir + float_model_file).to('cuda')
+    myModel = load_model(saved_model_dir + float_model_file)
     myModel.eval()
 
     # Fuse Conv, bn and relu
