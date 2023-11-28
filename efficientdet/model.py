@@ -5,7 +5,7 @@ from torch.ao.quantization import QuantStub, DeQuantStub
 
 from efficientnet import EfficientNet as EffNet
 from efficientnet.utils import MemoryEfficientSwish, Swish
-from efficientnet.utils_extra import Conv2dStaticSamePadding, MaxPool2dStaticSamePadding
+from efficientnet.utils_extra import Conv2dStaticSamePadding, MaxPool2dStaticSamePadding, M
 
 
 def nms(dets, thresh):
@@ -54,8 +54,7 @@ class SeparableConvBlock(nn.Module):
             x = self.swish(x)
         x=self.dequant(x)
         return x
-    
-    
+  
 class BiFPN(nn.Module):
     """
     modified by Zylo117
@@ -74,6 +73,8 @@ class BiFPN(nn.Module):
             onnx_export: if True, use Swish instead of MemoryEfficientSwish
         """
         super(BiFPN, self).__init__()
+        self.quant = torch.ao.quantization.QuantStub()
+        self.dequant = torch.ao.quantization.DeQuantStub()
         self.epsilon = epsilon
         self.use_p8 = use_p8
 
@@ -110,20 +111,20 @@ class BiFPN(nn.Module):
         if self.first_time:
             self.p5_down_channel = nn.Sequential(
                 Conv2dStaticSamePadding(conv_channels[2], num_channels, 1),
-                nn.BatchNorm2d(num_channels, momentum=0.01, eps=1e-3),
+                M(num_channels, momentum=0.01, eps=1e-3),
             )
             self.p4_down_channel = nn.Sequential(
                 Conv2dStaticSamePadding(conv_channels[1], num_channels, 1),
-                nn.BatchNorm2d(num_channels, momentum=0.01, eps=1e-3),
+                M(num_channels, momentum=0.01, eps=1e-3),
             )
             self.p3_down_channel = nn.Sequential(
                 Conv2dStaticSamePadding(conv_channels[0], num_channels, 1),
-                nn.BatchNorm2d(num_channels, momentum=0.01, eps=1e-3),
+                M(num_channels, momentum=0.01, eps=1e-3),
             )
 
             self.p5_to_p6 = nn.Sequential(
                 Conv2dStaticSamePadding(conv_channels[2], num_channels, 1),
-                nn.BatchNorm2d(num_channels, momentum=0.01, eps=1e-3),
+                M(num_channels, momentum=0.01, eps=1e-3),
                 MaxPool2dStaticSamePadding(3, 2)
             )
             self.p6_to_p7 = nn.Sequential(
@@ -136,11 +137,11 @@ class BiFPN(nn.Module):
 
             self.p4_down_channel_2 = nn.Sequential(
                 Conv2dStaticSamePadding(conv_channels[1], num_channels, 1),
-                nn.BatchNorm2d(num_channels, momentum=0.01, eps=1e-3),
+                M(num_channels, momentum=0.01, eps=1e-3),
             )
             self.p5_down_channel_2 = nn.Sequential(
                 Conv2dStaticSamePadding(conv_channels[2], num_channels, 1),
-                nn.BatchNorm2d(num_channels, momentum=0.01, eps=1e-3),
+               M(num_channels, momentum=0.01, eps=1e-3),
             )
 
         # Weight
@@ -187,18 +188,21 @@ class BiFPN(nn.Module):
         # if same, pass;
         # elif earlier phase, downsample to target phase's by pooling
         # elif later phase, upsample to target phase's by nearest interpolation
-
         if self.attention:
             outs = self._forward_fast_attention(inputs)
         else:
             outs = self._forward(inputs)
-
+        #outs=self.dequant(outs)
         return outs
 
     def _forward_fast_attention(self, inputs):
         if self.first_time:
+            inputs = map(self.dequant, inputs)
             p3, p4, p5 = inputs
 
+            p3=self.quant(p3)
+            p4=self.quant(p4)
+            p5 =self.quant(p5)       
             p6_in = self.p5_to_p6(p5)
             p7_in = self.p6_to_p7(p6_in)
 
