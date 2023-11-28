@@ -33,7 +33,7 @@ class Conv2dStaticSamePadding(nn.Module):
             self.kernel_size = [self.kernel_size[0]] * 2
 
     def forward(self, x):
-        x = self.quant(x)
+        #x = self.quant(x)       
         h, w = x.shape[-2:]
         
         extra_h = (math.ceil(w / self.stride[1]) - 1) * self.stride[1] - w + self.kernel_size[1]
@@ -45,7 +45,8 @@ class Conv2dStaticSamePadding(nn.Module):
         bottom = extra_v - top
 
         x = F.pad(x, [left, right, top, bottom])
-
+        x = self.dequant(x)
+        x = self.quant(x)
         x = self.conv(x)
         x = self.dequant(x)
         return x
@@ -59,6 +60,8 @@ class MaxPool2dStaticSamePadding(nn.Module):
 
     def __init__(self, *args, **kwargs):
         super().__init__()
+        self.quant = torch.ao.quantization.QuantStub()
+        self.dequant = torch.ao.quantization.DeQuantStub()
         self.pool = nn.MaxPool2d(*args, **kwargs)
         self.stride = self.pool.stride
         self.kernel_size = self.pool.kernel_size
@@ -85,6 +88,19 @@ class MaxPool2dStaticSamePadding(nn.Module):
         bottom = extra_v - top
 
         x = F.pad(x, [left, right, top, bottom])
-
+        x = self.quant(x)
         x = self.pool(x)
+        x = self.dequant(x)
         return x
+
+class M(nn.Module):
+    def __init__(self,num_channels,momentum,eps):
+        super().__init__()
+        self.quant = torch.ao.quantization.QuantStub()
+        self.bn2d = torch.nn.BatchNorm2d(num_channels, 0.01, 1e-3)
+    def forward(self, x):
+        # during the convert step, this will be replaced with a
+        # `quantize_per_tensor` call
+        x = self.quant(x)
+        x = self.bn2d(x)
+        return x   
