@@ -37,9 +37,9 @@ BlockArgs.__new__.__defaults__ = (None,) * len(BlockArgs._fields)
 
 class SwishImplementation(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, i):
+    def forward(ctx, i):      
         result = i * torch.sigmoid(i)
-        ctx.save_for_backward(i)
+        ctx.save_for_backward(i)      
         return result
 
     @staticmethod
@@ -50,7 +50,11 @@ class SwishImplementation(torch.autograd.Function):
 
 
 class MemoryEfficientSwish(nn.Module):
-    def forward(self, x):
+    #  def __init__(self):
+    #     super().__init__()
+    #     self.dequant = torch.ao.quantization.DeQuantStub()
+     def forward(self, x):
+        #x=self.dequant(x)
         return SwishImplementation.apply(x)
 
 
