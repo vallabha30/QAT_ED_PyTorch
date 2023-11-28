@@ -1,7 +1,7 @@
 # Author: Zylo117
 
 import math
-
+import torch
 from torch import nn
 import torch.nn.functional as F
 
@@ -14,6 +14,8 @@ class Conv2dStaticSamePadding(nn.Module):
 
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, bias=True, groups=1, dilation=1, **kwargs):
         super().__init__()
+        self.quant = torch.ao.quantization.QuantStub()
+        self.dequant = torch.ao.quantization.DeQuantStub()
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride,
                               bias=bias, groups=groups)
         self.stride = self.conv.stride
@@ -31,6 +33,7 @@ class Conv2dStaticSamePadding(nn.Module):
             self.kernel_size = [self.kernel_size[0]] * 2
 
     def forward(self, x):
+        x = self.quant(x)
         h, w = x.shape[-2:]
         
         extra_h = (math.ceil(w / self.stride[1]) - 1) * self.stride[1] - w + self.kernel_size[1]
@@ -44,6 +47,7 @@ class Conv2dStaticSamePadding(nn.Module):
         x = F.pad(x, [left, right, top, bottom])
 
         x = self.conv(x)
+        x = self.dequant(x)
         return x
 
 
