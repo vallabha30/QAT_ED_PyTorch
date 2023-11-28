@@ -439,6 +439,8 @@ class EfficientNet(nn.Module):
 
     def __init__(self, compound_coef, load_weights=False):
         super(EfficientNet, self).__init__()
+        self.quant = torch.ao.quantization.QuantStub()
+        self.dequant = torch.ao.quantization.DeQuantStub()
         model = EffNet.from_pretrained(f'efficientnet-b{compound_coef}', load_weights)
         
         del model._conv_head
@@ -454,8 +456,11 @@ class EfficientNet(nn.Module):
     def forward(self, x):
         
         x = self.model._conv_stem(x)
+        x = self.quant(x) 
         x = self.model._bn0(x)
+        x = self.dequant(x)               
         x = self.model._swish(x)
+        
         
         feature_maps = []
 
@@ -468,7 +473,7 @@ class EfficientNet(nn.Module):
             if drop_connect_rate:
                 drop_connect_rate *= float(idx) / len(self.model._blocks)
             x = block(x, drop_connect_rate=drop_connect_rate)
-
+            x = self.dequant(x)
             if block._depthwise_conv.stride == [2, 2]:
                 feature_maps.append(last_x)
             elif idx == len(self.model._blocks) - 1:
