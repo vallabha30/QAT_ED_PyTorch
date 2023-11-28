@@ -350,7 +350,7 @@ def main():
     image_ids = coco_gt.getImgIds()[:MAX_IMAGES]
     
     criterion = nn.CrossEntropyLoss()
-    float_model = load_model(saved_model_dir+float_model_file)
+    float_model = load_model(saved_model_dir+float_model_file).to('cpu')
     # if use_cuda:
     #   float_model.cuda()    
     if use_float16:
@@ -382,7 +382,7 @@ def main():
 
     num_calibration_batches = 32
 
-    myModel = load_model(saved_model_dir + float_model_file)
+    myModel = load_model(saved_model_dir + float_model_file).to('cpu')
     myModel.eval()
 
     # Fuse Conv, bn and relu
