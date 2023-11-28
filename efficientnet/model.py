@@ -1,7 +1,6 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-
 from .utils import (
     round_filters,
     round_repeats,
@@ -28,6 +27,8 @@ class MBConvBlock(nn.Module):
 
     def __init__(self, block_args, global_params):
         super().__init__()
+        self.quant = torch.ao.quantization.QuantStub()
+        self.dequant = torch.ao.quantization.DeQuantStub()
         self._block_args = block_args
         self._bn_mom = 1 - global_params.batch_norm_momentum
         self._bn_eps = global_params.batch_norm_epsilon
@@ -63,6 +64,7 @@ class MBConvBlock(nn.Module):
         self._project_conv = Conv2d(in_channels=oup, out_channels=final_oup, kernel_size=1, bias=False)
         self._bn2 = nn.BatchNorm2d(num_features=final_oup, momentum=self._bn_mom, eps=self._bn_eps)
         self._swish = MemoryEfficientSwish()
+        self.f_add = torch.ao.nn.quantized.FloatFunctional()
 
     def forward(self, inputs, drop_connect_rate=None):
         """
@@ -75,11 +77,15 @@ class MBConvBlock(nn.Module):
         x = inputs
         if self._block_args.expand_ratio != 1:
             x = self._expand_conv(inputs)
+            x = self.quant(x)
             x = self._bn0(x)
+            x = self.dequant(x)
             x = self._swish(x)
 
         x = self._depthwise_conv(x)
+        x = self.quant(x)
         x = self._bn1(x)
+        x = self.dequant(x)
         x = self._swish(x)
 
         # Squeeze and Excitation
@@ -91,14 +97,19 @@ class MBConvBlock(nn.Module):
             x = torch.sigmoid(x_squeezed) * x
 
         x = self._project_conv(x)
+        x = self.quant(x)
         x = self._bn2(x)
+        x = self.dequant(x)
+
 
         # Skip connection and drop connect
         input_filters, output_filters = self._block_args.input_filters, self._block_args.output_filters
         if self.id_skip and self._block_args.stride == 1 and input_filters == output_filters:
-            if drop_connect_rate:
+            if drop_connect_rate:                
                 x = drop_connect(x, p=drop_connect_rate, training=self.training)
-            x = x + inputs  # skip connection
+            x=self.quant(x) 
+            inputs=self.quant(inputs)
+            x=self.f_add.add(x ,inputs)  # skip connection
         return x
 
     def set_swish(self, memory_efficient=True):
