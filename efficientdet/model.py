@@ -34,7 +34,7 @@ class SeparableConvBlock(nn.Module):
         self.norm = norm
         if self.norm:
             # Warning: pytorch momentum is different from tensorflow's, momentum_pytorch = 1 - momentum_tensorflow
-            self.bn = Bn2dWrapper(num_features=out_channels, momentum=0.01, eps=1e-3)
+            self.bn = nn.BatchNorm2d(num_features=out_channels, momentum=0.01, eps=1e-3)
 
         self.activation = activation
         if self.activation:
@@ -362,7 +362,7 @@ class Regressor(nn.Module):
         self.conv_list = nn.ModuleList(
             [SeparableConvBlock(in_channels, in_channels, norm=False, activation=False) for i in range(num_layers)])
         self.bn_list = nn.ModuleList(
-            [nn.ModuleList([Bn2dWrapper(in_channels, momentum=0.01, eps=1e-3) for i in range(num_layers)]) for j in
+            [nn.ModuleList([nn.BatchNorm2d(in_channels, momentum=0.01, eps=1e-3) for i in range(num_layers)]) for j in
              range(pyramid_levels)])
         self.header = SeparableConvBlock(in_channels, num_anchors * 4, norm=False, activation=False)
         self.swish = MemoryEfficientSwish() if not onnx_export else Swish()
@@ -406,7 +406,7 @@ class QAT_Classifier(nn.Module):
         self.conv_list = nn.ModuleList(
             [SeparableConvBlock(in_channels, in_channels, norm=False, activation=False) for i in range(num_layers)])
         self.bn_list = nn.ModuleList(
-            [nn.ModuleList([Bn2dWrapper(in_channels, momentum=0.01, eps=1e-3) for i in range(num_layers)]) for j in
+            [nn.ModuleList([nn.BatchNorm2d(in_channels, momentum=0.01, eps=1e-3) for i in range(num_layers)]) for j in
              range(pyramid_levels)])
         self.header = SeparableConvBlock(in_channels, num_anchors * num_classes, norm=False, activation=False)
         self.swish = MemoryEfficientSwish() if not onnx_export else Swish()
