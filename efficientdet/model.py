@@ -197,6 +197,7 @@ class BiFPN(nn.Module):
         return outs
 
     def _forward_fast_attention(self, inputs):
+        f_add = torch.ao.nn.quantized.FloatFunctional()
         if self.first_time:
             #inputs = map(self.dequant, inputs)
             p3, p4, p5 = inputs
@@ -221,25 +222,25 @@ class BiFPN(nn.Module):
         p6_w1 = self.p6_w1_relu(self.p6_w1)
         weight = p6_w1 / (torch.sum(p6_w1, dim=0) + self.epsilon)
         # Connections for P6_0 and P7_0 to P6_1 respectively
-        p6_up = self.conv6_up(self.swish(weight[0] * p6_in + weight[1] * self.p6_upsample(p7_in)))
+        p6_up = self.conv6_up(self.swish(f_add.add(f_add.mul(weight[0] , p6_in) , f_add.mul(weight[1] , self.p6_upsample(p7_in)))))
 
         # Weights for P5_0 and P6_1 to P5_1
         p5_w1 = self.p5_w1_relu(self.p5_w1)
         weight = p5_w1 / (torch.sum(p5_w1, dim=0) + self.epsilon)
         # Connections for P5_0 and P6_1 to P5_1 respectively
-        p5_up = self.conv5_up(self.swish(weight[0] * p5_in + weight[1] * self.p5_upsample(p6_up)))
+        p5_up = self.conv5_up(self.swish(f_add.add(f_add.mul(weight[0] , p5_in) , f_add.mul(weight[1] , self.p5_upsample(p6_up)))))
 
         # Weights for P4_0 and P5_1 to P4_1
         p4_w1 = self.p4_w1_relu(self.p4_w1)
         weight = p4_w1 / (torch.sum(p4_w1, dim=0) + self.epsilon)
         # Connections for P4_0 and P5_1 to P4_1 respectively
-        p4_up = self.conv4_up(self.swish(weight[0] * p4_in + weight[1] * self.p4_upsample(p5_up)))
+        p4_up = self.conv4_up(self.swish(f_add.add(f_add.mul(weight[0] , p4_in) , f_add.mul(weight[1] , self.p4_upsample(p5_up)))))
 
         # Weights for P3_0 and P4_1 to P3_2
         p3_w1 = self.p3_w1_relu(self.p3_w1)
         weight = p3_w1 / (torch.sum(p3_w1, dim=0) + self.epsilon)
         # Connections for P3_0 and P4_1 to P3_2 respectively
-        p3_out = self.conv3_up(self.swish(weight[0] * p3_in + weight[1] * self.p3_upsample(p4_up)))
+        p3_out = self.conv3_up(self.swish(f_add.add(f_add.mul(weight[0] , p3_in) , f_add.mul(weight[1] , self.p3_upsample(p4_up)))))
 
         if self.first_time:
             p4_in = self.p4_down_channel_2(p4)
@@ -250,27 +251,27 @@ class BiFPN(nn.Module):
         weight = p4_w2 / (torch.sum(p4_w2, dim=0) + self.epsilon)
         # Connections for P4_0, P4_1 and P3_2 to P4_2 respectively
         p4_out = self.conv4_down(
-            self.swish(weight[0] * p4_in + weight[1] * p4_up + weight[2] * self.p4_downsample(p3_out)))
+            self.swish(f_add.add(f_add.mul(weight[0] , p4_in) , f_add.mul(weight[1] , p4_up) , f_add.mul(weight[2] , self.p4_downsample(p3_out)))))
 
         # Weights for P5_0, P5_1 and P4_2 to P5_2
         p5_w2 = self.p5_w2_relu(self.p5_w2)
         weight = p5_w2 / (torch.sum(p5_w2, dim=0) + self.epsilon)
         # Connections for P5_0, P5_1 and P4_2 to P5_2 respectively
         p5_out = self.conv5_down(
-            self.swish(weight[0] * p5_in + weight[1] * p5_up + weight[2] * self.p5_downsample(p4_out)))
+            self.swish(f_add.add(f_add.mul(weight[0] , p5_in) , f_add.mul(weight[1] , p5_up) , f_add.mul(weight[2] , self.p5_downsample(p4_out)))))
 
         # Weights for P6_0, P6_1 and P5_2 to P6_2
         p6_w2 = self.p6_w2_relu(self.p6_w2)
         weight = p6_w2 / (torch.sum(p6_w2, dim=0) + self.epsilon)
         # Connections for P6_0, P6_1 and P5_2 to P6_2 respectively
         p6_out = self.conv6_down(
-            self.swish(weight[0] * p6_in + weight[1] * p6_up + weight[2] * self.p6_downsample(p5_out)))
+            self.swish(f_add.add(f_add.mul(weight[0] , p6_in) , f_add.mul(weight[1] , p6_up) , f_add.mul(weight[2] , self.p6_downsample(p5_out)))))
 
         # Weights for P7_0 and P6_2 to P7_2
         p7_w2 = self.p7_w2_relu(self.p7_w2)
         weight = p7_w2 / (torch.sum(p7_w2, dim=0) + self.epsilon)
         # Connections for P7_0 and P6_2 to P7_2
-        p7_out = self.conv7_down(self.swish(weight[0] * p7_in + weight[1] * self.p7_downsample(p6_out)))
+        p7_out = self.conv7_down(self.swish(f_add.add(f_add.mul(weight[0] , p7_in) , f_add.mul(weight[1] , self.p7_downsample(p6_out)))))
 
         return p3_out, p4_out, p5_out, p6_out, p7_out
 
