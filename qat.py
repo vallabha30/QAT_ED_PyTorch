@@ -35,7 +35,7 @@ from efficientdet.dataset import CocoDataset, Resizer, Normalizer, Augmenter, co
 from utils.utils import replace_w_sync_bn, CustomDataParallel, get_last_weights, init_weights, boolean_string
 from efficientdet.model import BiFPN, Regressor, QAT_Classifier, EfficientNet
 from efficientdet.utils import Anchors
-from efficientnet.utils_extra import Conv2dStaticSamePadding, MaxPool2dStaticSamePadding
+from efficientnet.utils_extra import Conv2dStaticSamePadding, MaxPool2dStaticSamePadding, Bn2dWrapper
 
 from torchvision.datasets import CocoDetection
 from torch.nn.functional import interpolate
@@ -82,7 +82,7 @@ class SeparableConvBlock(nn.Module):
         self.norm = norm
         if self.norm:
             # Warning: pytorch momentum is different from tensorflow's, momentum_pytorch = 1 - momentum_tensorflow
-            self.bn = nn.BatchNorm2d(num_features=out_channels, momentum=0.01, eps=1e-3)
+            self.bn = Bn2dWrapper(num_features=out_channels, momentum=0.01, eps=1e-3)
 
         self.activation = activation
         if self.activation:
@@ -169,7 +169,7 @@ class EfficientDetBackbone(nn.Module):
         _, p3, p4, p5 = self.backbone_net(inputs)
 
         features = (p3, p4, p5)
-        #features=self.quant(features)
+        #features=self.dequant(features)
 
         features = self.bifpn(features)
 
@@ -323,7 +323,8 @@ class Params:
 def load_model(model_file):
     params = Params(f'/content/QAT_ED_PyTorch/projects/coco.yml')
     model = EfficientDetBackbone(num_classes=len(params.obj_list),compound_coef=0,ratios=eval(params.anchors_ratios), scales=eval(params.anchors_scales))
-    model.load_state_dict(torch.load(model_file, map_location=torch.device('cpu')))
+    model.load_state_dict(torch.load(model_file, map_location=torch.device('cpu')), strict=False)
+
     model.requires_grad_(False)
     return model
 
