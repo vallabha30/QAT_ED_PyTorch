@@ -34,7 +34,7 @@ class SeparableConvBlock(nn.Module):
         self.norm = norm
         if self.norm:
             # Warning: pytorch momentum is different from tensorflow's, momentum_pytorch = 1 - momentum_tensorflow
-            self.bn = nn.BatchNorm2d(num_features=out_channels, momentum=0.01, eps=1e-3)
+            self.bn=Bn2dWrapper(num_features=out_channels, momentum=0.01, eps=1e-3)
 
         self.activation = activation
         if self.activation:
@@ -111,20 +111,20 @@ class BiFPN(nn.Module):
         if self.first_time:
             self.p5_down_channel = nn.Sequential(
                 Conv2dStaticSamePadding(conv_channels[2], num_channels, 1),
-                nn.BatchNorm2d(num_channels, momentum=0.01, eps=1e-3),
+                Bn2dWrapper(num_channels, momentum=0.01, eps=1e-3),
             )
             self.p4_down_channel = nn.Sequential(
                 Conv2dStaticSamePadding(conv_channels[1], num_channels, 1),
-                nn.BatchNorm2d(num_channels, momentum=0.01, eps=1e-3),
+                Bn2dWrapper(num_channels, momentum=0.01, eps=1e-3),
             )
             self.p3_down_channel = nn.Sequential(
                 Conv2dStaticSamePadding(conv_channels[0], num_channels, 1),
-                nn.BatchNorm2d(num_channels, momentum=0.01, eps=1e-3),
+                Bn2dWrapper(num_channels, momentum=0.01, eps=1e-3),
             )
 
             self.p5_to_p6 = nn.Sequential(
                 Conv2dStaticSamePadding(conv_channels[2], num_channels, 1),
-                nn.BatchNorm2d(num_channels, momentum=0.01, eps=1e-3),
+                Bn2dWrapper(num_channels, momentum=0.01, eps=1e-3),
                 MaxPool2dStaticSamePadding(3, 2)
             )
             self.p6_to_p7 = nn.Sequential(
@@ -137,11 +137,11 @@ class BiFPN(nn.Module):
 
             self.p4_down_channel_2 = nn.Sequential(
                 Conv2dStaticSamePadding(conv_channels[1], num_channels, 1),
-                nn.BatchNorm2d(num_channels, momentum=0.01, eps=1e-3),
+                Bn2dWrapper(num_channels, momentum=0.01, eps=1e-3),
             )
             self.p5_down_channel_2 = nn.Sequential(
                 Conv2dStaticSamePadding(conv_channels[2], num_channels, 1),
-               nn.BatchNorm2d(num_channels, momentum=0.01, eps=1e-3),
+               Bn2dWrapper(num_channels, momentum=0.01, eps=1e-3),
             )
 
         # Weight
@@ -166,6 +166,7 @@ class BiFPN(nn.Module):
         self.attention = attention
 
     def forward(self, inputs):
+        # inputs= self.quant(inputs)
         """
         illustration of a minimal bifpn unit
             P7_0 -------------------------> P7_2 -------->
@@ -197,7 +198,7 @@ class BiFPN(nn.Module):
 
     def _forward_fast_attention(self, inputs):
         if self.first_time:
-            inputs = map(self.dequant, inputs)
+            #inputs = map(self.dequant, inputs)
             p3, p4, p5 = inputs
 
             p3=self.quant(p3)
@@ -362,7 +363,7 @@ class Regressor(nn.Module):
         self.conv_list = nn.ModuleList(
             [SeparableConvBlock(in_channels, in_channels, norm=False, activation=False) for i in range(num_layers)])
         self.bn_list = nn.ModuleList(
-            [nn.ModuleList([nn.BatchNorm2d(in_channels, momentum=0.01, eps=1e-3) for i in range(num_layers)]) for j in
+            [nn.ModuleList([Bn2dWrapper(in_channels, momentum=0.01, eps=1e-3) for i in range(num_layers)]) for j in
              range(pyramid_levels)])
         self.header = SeparableConvBlock(in_channels, num_anchors * 4, norm=False, activation=False)
         self.swish = MemoryEfficientSwish() if not onnx_export else Swish()
@@ -406,7 +407,7 @@ class QAT_Classifier(nn.Module):
         self.conv_list = nn.ModuleList(
             [SeparableConvBlock(in_channels, in_channels, norm=False, activation=False) for i in range(num_layers)])
         self.bn_list = nn.ModuleList(
-            [nn.ModuleList([nn.BatchNorm2d(in_channels, momentum=0.01, eps=1e-3) for i in range(num_layers)]) for j in
+            [nn.ModuleList([Bn2dWrapper(in_channels, momentum=0.01, eps=1e-3) for i in range(num_layers)]) for j in
              range(pyramid_levels)])
         self.header = SeparableConvBlock(in_channels, num_anchors * num_classes, norm=False, activation=False)
         self.swish = MemoryEfficientSwish() if not onnx_export else Swish()
