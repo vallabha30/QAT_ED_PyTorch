@@ -95,12 +95,13 @@ class MaxPool2dStaticSamePadding(nn.Module):
 
 
 class Bn2dWrapper(nn.Module):
-    def __init__(self, num_features, momentum, eps):  
+    def __init__(self, num_features, momentum=0.01, eps=1e-3):  
         super().__init__()
         self.quant = torch.ao.quantization.QuantStub()
-        self.bn2d = torch.nn.BatchNorm2d(num_features, momentum, eps) 
+        self.bn = nn.BatchNorm2d(num_features, momentum=momentum, eps=eps) 
 
     def forward(self, x):
+        
         x = self.quant(x)
-        x = self.bn2d(x)
+        x = self.bn(x)
         return x
