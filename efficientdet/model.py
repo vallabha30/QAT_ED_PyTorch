@@ -111,20 +111,20 @@ class BiFPN(nn.Module):
         if self.first_time:
             self.p5_down_channel = nn.Sequential(
                 Conv2dStaticSamePadding(conv_channels[2], num_channels, 1),
-                Bn2dWrapper(num_channels, momentum=0.01, eps=1e-3),
+                nn.BatchNorm2d(num_channels, momentum=0.01, eps=1e-3),
             )
             self.p4_down_channel = nn.Sequential(
                 Conv2dStaticSamePadding(conv_channels[1], num_channels, 1),
-                Bn2dWrapper(num_channels, momentum=0.01, eps=1e-3),
+                nn.BatchNorm2d(num_channels, momentum=0.01, eps=1e-3),
             )
             self.p3_down_channel = nn.Sequential(
                 Conv2dStaticSamePadding(conv_channels[0], num_channels, 1),
-                Bn2dWrapper(num_channels, momentum=0.01, eps=1e-3),
+                nn.BatchNorm2d(num_channels, momentum=0.01, eps=1e-3),
             )
 
             self.p5_to_p6 = nn.Sequential(
                 Conv2dStaticSamePadding(conv_channels[2], num_channels, 1),
-                Bn2dWrapper(num_channels, momentum=0.01, eps=1e-3),
+                nn.BatchNorm2d(num_channels, momentum=0.01, eps=1e-3),
                 MaxPool2dStaticSamePadding(3, 2)
             )
             self.p6_to_p7 = nn.Sequential(
@@ -137,11 +137,11 @@ class BiFPN(nn.Module):
 
             self.p4_down_channel_2 = nn.Sequential(
                 Conv2dStaticSamePadding(conv_channels[1], num_channels, 1),
-                Bn2dWrapper(num_channels, momentum=0.01, eps=1e-3),
+                nn.BatchNorm2d(num_channels, momentum=0.01, eps=1e-3),
             )
             self.p5_down_channel_2 = nn.Sequential(
                 Conv2dStaticSamePadding(conv_channels[2], num_channels, 1),
-               Bn2dWrapper(num_channels, momentum=0.01, eps=1e-3),
+               nn.BatchNorm2d(num_channels, momentum=0.01, eps=1e-3),
             )
 
         # Weight
