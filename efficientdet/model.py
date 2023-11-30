@@ -52,7 +52,7 @@ class SeparableConvBlock(nn.Module):
 
         if self.activation:
             x = self.swish(x)
-        x=self.dequant(x)
+        # x=self.dequant(x)
         return x
   
 class BiFPN(nn.Module):
@@ -208,6 +208,7 @@ class BiFPN(nn.Module):
             p4=self.quant(p4)
             p5 =self.quant(p5)       
             p6_in = self.p5_to_p6(p5)
+            p6_in=self.quant(p6_in)
             p7_in = self.p6_to_p7(p6_in)
 
             p3_in = self.p3_down_channel(p3)
@@ -222,8 +223,12 @@ class BiFPN(nn.Module):
 
         # Weights for P6_0 and P7_0 to P6_1
         p6_w1 = self.p6_w1_relu(self.p6_w1)
+
+        p6_w1 = self.quant(p6_w1)
+        p6_w1 = self.dequant(p6_w1)
         weight = p6_w1 / (torch.sum(p6_w1, dim=0) + self.epsilon)
         # Connections for P6_0 and P7_0 to P6_1 respectively
+
         p6_up = self.conv6_up(self.swish(self.f_add.add(self.f_add.mul(weight[0] , p6_in) , self.f_add.mul(weight[1] , self.p6_upsample(p7_in)))))
 
         # Weights for P5_0 and P6_1 to P5_1
