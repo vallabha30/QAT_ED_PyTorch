@@ -52,7 +52,7 @@ class SeparableConvBlock(nn.Module):
 
         if self.activation:
             x = self.swish(x)
-        # x=self.dequant(x)
+        x=self.dequant(x)
         return x
   
 class BiFPN(nn.Module):
@@ -208,12 +208,21 @@ class BiFPN(nn.Module):
             p4=self.quant(p4)
             p5 =self.quant(p5)       
             p6_in = self.p5_to_p6(p5)
+            p6_in=self.dequant(p6_in)
             p6_in=self.quant(p6_in)
             p7_in = self.p6_to_p7(p6_in)
+            p7_in=self.dequant(p7_in)
+            p7_in = self.quant(p7_in)
 
             p3_in = self.p3_down_channel(p3)
+            p3_in = self.dequant(p3_in)
+            p3_in = self.quant(p3_in)
             p4_in = self.p4_down_channel(p4)
+            p4_in = self.dequant(p4_in)
+            p4_in = self.quant(p4_in)
             p5_in = self.p5_down_channel(p5)
+            p5_in = self.dequant(p5_in)
+            p5_in = self.quant(p5_in)
 
         else:
             # P3_0, P4_0, P5_0, P6_0 and P7_0
@@ -227,59 +236,71 @@ class BiFPN(nn.Module):
         p6_w1 = self.quant(p6_w1)
         p6_w1 = self.dequant(p6_w1)
         weight = p6_w1 / (torch.sum(p6_w1, dim=0) + self.epsilon)
+        weight = self.quant(weight)
         # Connections for P6_0 and P7_0 to P6_1 respectively
 
         p6_up = self.conv6_up(self.swish(self.f_add.add(self.f_add.mul(weight[0] , p6_in) , self.f_add.mul(weight[1] , self.p6_upsample(p7_in)))))
-
+        p6_up=self.dequant(p6_up)
+        p6_up=self.quant(p6_up)
+       
         # Weights for P5_0 and P6_1 to P5_1
         p5_w1 = self.p5_w1_relu(self.p5_w1)
         weight = p5_w1 / (torch.sum(p5_w1, dim=0) + self.epsilon)
+        weight = self.quant(weight)
         # Connections for P5_0 and P6_1 to P5_1 respectively
         p5_up = self.conv5_up(self.swish(self.f_add.add(self.f_add.mul(weight[0] , p5_in) , self.f_add.mul(weight[1] , self.p5_upsample(p6_up)))))
-
+        p5_up = self.quant(p5_up)
         # Weights for P4_0 and P5_1 to P4_1
         p4_w1 = self.p4_w1_relu(self.p4_w1)
         weight = p4_w1 / (torch.sum(p4_w1, dim=0) + self.epsilon)
+        weight = self.quant(weight)
         # Connections for P4_0 and P5_1 to P4_1 respectively
         p4_up = self.conv4_up(self.swish(self.f_add.add(self.f_add.mul(weight[0] , p4_in) , self.f_add.mul(weight[1] , self.p4_upsample(p5_up)))))
-
+        p4_up = self.quant(p4_up)
         # Weights for P3_0 and P4_1 to P3_2
         p3_w1 = self.p3_w1_relu(self.p3_w1)
         weight = p3_w1 / (torch.sum(p3_w1, dim=0) + self.epsilon)
+        weight = self.quant(weight)
         # Connections for P3_0 and P4_1 to P3_2 respectively
         p3_out = self.conv3_up(self.swish(self.f_add.add(self.f_add.mul(weight[0] , p3_in) , self.f_add.mul(weight[1] , self.p3_upsample(p4_up)))))
-
+        p3_out = self.quant(p3_out)
         if self.first_time:
             p4_in = self.p4_down_channel_2(p4)
+            p4_in = self.dequant(p4_in)
+            p4_in = self.quant(p4_in)
             p5_in = self.p5_down_channel_2(p5)
 
         # Weights for P4_0, P4_1 and P3_2 to P4_2
         p4_w2 = self.p4_w2_relu(self.p4_w2)
         weight = p4_w2 / (torch.sum(p4_w2, dim=0) + self.epsilon)
+        weight = self.quant(weight)
         # Connections for P4_0, P4_1 and P3_2 to P4_2 respectively
         p4_out = self.conv4_down(
             self.swish(self.f_add.add(self.f_add.mul(weight[0] , p4_in) , self.f_add.mul(weight[1] , p4_up) , self.f_add.mul(weight[2] , self.p4_downsample(p3_out)))))
-
+        p4_out = self.quant(p4_out)
         # Weights for P5_0, P5_1 and P4_2 to P5_2
         p5_w2 = self.p5_w2_relu(self.p5_w2)
         weight = p5_w2 / (torch.sum(p5_w2, dim=0) + self.epsilon)
+        weight = self.quant(weight)
         # Connections for P5_0, P5_1 and P4_2 to P5_2 respectively
         p5_out = self.conv5_down(
             self.swish(self.f_add.add(self.f_add.mul(weight[0] , p5_in) , self.f_add.mul(weight[1] , p5_up) , self.f_add.mul(weight[2] , self.p5_downsample(p4_out)))))
-
+        p5_out = self.quant(p5_out)
         # Weights for P6_0, P6_1 and P5_2 to P6_2
         p6_w2 = self.p6_w2_relu(self.p6_w2)
         weight = p6_w2 / (torch.sum(p6_w2, dim=0) + self.epsilon)
+        weight = self.quant(weight)
         # Connections for P6_0, P6_1 and P5_2 to P6_2 respectively
         p6_out = self.conv6_down(
             self.swish(self.f_add.add(self.f_add.mul(weight[0] , p6_in) , self.f_add.mul(weight[1] , p6_up) , self.f_add.mul(weight[2] , self.p6_downsample(p5_out)))))
-
+        p6_out = self.quant(p6_out)
         # Weights for P7_0 and P6_2 to P7_2
         p7_w2 = self.p7_w2_relu(self.p7_w2)
         weight = p7_w2 / (torch.sum(p7_w2, dim=0) + self.epsilon)
+        weight = self.quant(weight)
         # Connections for P7_0 and P6_2 to P7_2
         p7_out = self.conv7_down(self.swish(self.f_add.add(self.f_add.mul(weight[0] , p7_in) , self.f_add.mul(weight[1] , self.p7_downsample(p6_out)))))
-
+        p7_out = self.quant(p7_out)
         return p3_out, p4_out, p5_out, p6_out, p7_out
 
     def _forward(self, inputs):
