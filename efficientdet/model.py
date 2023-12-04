@@ -269,38 +269,48 @@ class BiFPN(nn.Module):
             p4_in = self.dequant(p4_in)
             p4_in = self.quant(p4_in)
             p5_in = self.p5_down_channel_2(p5)
-
+        p4_in = self.dequant(p4_in)
+        p4_up = self.dequant(p4_up)
+        p3_out = self.dequant(p3_out) 
+        p5_in = self.dequant(p5_in)
+        p5_up = self.dequant(p5_up)
+        p6_in = self.dequant(p6_in)
+        p6_up = self.dequant(p6_up)
+        p7_in = self.dequant(p7_in)
+        
         # Weights for P4_0, P4_1 and P3_2 to P4_2
         p4_w2 = self.p4_w2_relu(self.p4_w2)
         weight = p4_w2 / (torch.sum(p4_w2, dim=0) + self.epsilon)
-        weight = self.quant(weight)
+        #weight = self.quant(weight)
         # Connections for P4_0, P4_1 and P3_2 to P4_2 respectively
-        p4_out = self.conv4_down(
-            self.swish(self.f_add.add(self.f_add.mul(weight[0] , p4_in) , self.f_add.mul(weight[1] , p4_up) , self.f_add.mul(weight[2] , self.p4_downsample(p3_out)))))
-        p4_out = self.quant(p4_out)
+        p4_out = self.conv4_down(self.swish((weight[0] * p4_in) + (weight[1] * p4_up) + (weight[2] * self.p4_downsample(p3_out))))
+        #p4_out = self.quant(p4_out)
         # Weights for P5_0, P5_1 and P4_2 to P5_2
         p5_w2 = self.p5_w2_relu(self.p5_w2)
         weight = p5_w2 / (torch.sum(p5_w2, dim=0) + self.epsilon)
-        weight = self.quant(weight)
+        #weight = self.quant(weight)
         # Connections for P5_0, P5_1 and P4_2 to P5_2 respectively
-        p5_out = self.conv5_down(
-            self.swish(self.f_add.add(self.f_add.mul(weight[0] , p5_in) , self.f_add.mul(weight[1] , p5_up) , self.f_add.mul(weight[2] , self.p5_downsample(p4_out)))))
-        p5_out = self.quant(p5_out)
+        p5_out = self.conv5_down(self.swish((weight[0] * p5_in) + (weight[1] * p5_up) + (weight[2] * self.p5_downsample(p4_out))))
+        #p5_out = self.quant(p5_out)
         # Weights for P6_0, P6_1 and P5_2 to P6_2
         p6_w2 = self.p6_w2_relu(self.p6_w2)
         weight = p6_w2 / (torch.sum(p6_w2, dim=0) + self.epsilon)
-        weight = self.quant(weight)
+        #weight = self.quant(weight)
         # Connections for P6_0, P6_1 and P5_2 to P6_2 respectively
         p6_out = self.conv6_down(
-            self.swish(self.f_add.add(self.f_add.mul(weight[0] , p6_in) , self.f_add.mul(weight[1] , p6_up) , self.f_add.mul(weight[2] , self.p6_downsample(p5_out)))))
-        p6_out = self.quant(p6_out)
+            self.swish((weight[0] * p6_in) + (weight[1] * p6_up) + (weight[2] * self.p6_downsample(p5_out))))
+        #p6_out = self.quant(p6_out)
         # Weights for P7_0 and P6_2 to P7_2
         p7_w2 = self.p7_w2_relu(self.p7_w2)
         weight = p7_w2 / (torch.sum(p7_w2, dim=0) + self.epsilon)
-        weight = self.quant(weight)
+        #weight = self.quant(weight)
         # Connections for P7_0 and P6_2 to P7_2
-        p7_out = self.conv7_down(self.swish(self.f_add.add(self.f_add.mul(weight[0] , p7_in) , self.f_add.mul(weight[1] , self.p7_downsample(p6_out)))))
+        p7_out = self.conv7_down(self.swish((weight[0] * p7_in) + (weight[1] * self.p7_downsample(p6_out))))
         p7_out = self.quant(p7_out)
+        p6_out = self.quant(p6_out)
+        p5_out = self.quant(p5_out)
+        p4_out = self.quant(p4_out)
+        p3_out = self.quant(p3_out)
         return p3_out, p4_out, p5_out, p6_out, p7_out
 
     def _forward(self, inputs):
@@ -386,6 +396,8 @@ class Regressor(nn.Module):
 
     def __init__(self, in_channels, num_anchors, num_layers, pyramid_levels=5, onnx_export=False):
         super(Regressor, self).__init__()
+        self.quant = torch.ao.quantization.QuantStub()
+        self.dequant = torch.ao.quantization.DeQuantStub()
         
         self.num_layers = num_layers
 
@@ -402,7 +414,7 @@ class Regressor(nn.Module):
         feats = []
         for feat, bn_list in zip(inputs, self.bn_list):
             for i, bn, conv in zip(range(self.num_layers), bn_list, self.conv_list):
-                
+                feat = self.dequant(feat)
                 feat = conv(feat)
                 feat = bn(feat)
                 feat = self.swish(feat)
@@ -446,7 +458,7 @@ class QAT_Classifier(nn.Module):
         feats = []
         for feat, bn_list in zip(inputs, self.bn_list):
             for i, bn, conv in zip(range(self.num_layers), bn_list, self.conv_list):
-                feat=self.quant(feat)
+                feat=self.dequant(feat)
                 feat = conv(feat)
                 feat = bn(feat)
                 feat = self.swish(feat)
