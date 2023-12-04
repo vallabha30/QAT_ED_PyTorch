@@ -158,7 +158,7 @@ class EfficientDetBackbone(nn.Module):
         self.dequant=DeQuantStub()
     def freeze_bn(self):
         for m in self.modules():
-            if isinstance(m, nn.BatchNorm2d):
+            if isinstance(m, Bn2dWrapper):
                 m.eval()
 
     def forward(self, inputs):
