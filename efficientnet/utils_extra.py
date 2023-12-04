@@ -166,7 +166,7 @@ class MaxPool2dStaticSamePadding(nn.Module):
         x = self.dequant(x)
         x = self.quant(x)
         x = self.pool(x)
-        #x = self.dequant(x)
+        x = self.dequant(x)
         return x
 
 
