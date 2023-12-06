@@ -156,6 +156,11 @@ class EfficientDetBackbone(nn.Module):
 
         self.backbone_net = EfficientNet(self.backbone_compound_coef[compound_coef], load_weights)
         self.dequant=DeQuantStub()
+        # # Attach observers to specific layers in your model
+        self.bn1 = Bn2dWrapper(64)  # Replace with actual batch norm layer
+        self.bn2 = Bn2dWrapper(128)  # Replace with actual batch norm layer
+        # # Add more observers for other layers as needed
+
     def freeze_bn(self):
         for m in self.modules():
             if isinstance(m, Bn2dWrapper):
@@ -165,18 +170,14 @@ class EfficientDetBackbone(nn.Module):
         
 
         max_size = inputs.shape[-1]
-
         _, p3, p4, p5 = self.backbone_net(inputs)
-
         features = (p3, p4, p5)
-        #features=self.dequant(features)
-
         features = self.bifpn(features)
-
         regression = self.regressor(features)
         classification = self.classifier(features)
         anchors = self.anchors(inputs, inputs.dtype)
-        #features=self.dequant(features)
+        # features=self.quant(features)
+        # features=self.dequant(features)
 
         return features , regression, classification, anchors
       
@@ -206,6 +207,12 @@ class EfficientDetBackbone(nn.Module):
             print(ret)
         except RuntimeError as e:
             print('Ignoring ' + str(e) + '"')
+    def prepare_for_quantization(self):
+        # Apply observers to specific layers
+        torch.quantization.prepare_qat(self, inplace=True)
+    def convert_to_quantized(self):
+        # Convert model to quantized
+        torch.quantization.convert(self, inplace=True)
 
 
 #<---------HELPER FUNCTIONS----------->
@@ -228,7 +235,7 @@ gpu = args.device
 use_float16 = args.float16
 override_prev_results = args.override
 project_name = args.project
-weights_path = f'/content/QAT_ED_PyTorch/weights/efficientdet-d0.pth' if args.weights is None else args.weights
+weights_path = f'/content/QAT_ED_PyTorch/weights/efficientdet-d0_updated.pth' if args.weights is None else args.weights
 
 params = yaml.safe_load(open(f'/content/QAT_ED_PyTorch/projects/coco.yml'))
 obj_list = params['obj_list']
@@ -340,15 +347,20 @@ def print_size_of_model(model):
 def main():
 
     saved_model_dir = '/content/QAT_ED_PyTorch/weights'
-    float_model_file = '/efficientdet-d0.pth'
+    float_model_file = '/efficientdet-d0_updated.pth'
     scripted_float_model_file = 'efficientdet_quantization_scripted.pth'
     scripted_quantized_model_file = 'efficientdet_quantization_scripted_quantized.pth'
     SET_NAME = params['val_set']
+    set_name = params['train_set']
+    TRAIN_GT=f'/content/QAT_ED_PyTorch/datasets/coco/annotations/instances_train2017.json'
+    TRAIN_IMGS=f'/content/QAT_ED_PyTorch/datasets/coco/train2017/'
     VAL_GT = f'/content/QAT_ED_PyTorch/datasets/coco/annotations/instances_val2017.json'
     VAL_IMGS = f'/content/QAT_ED_PyTorch/datasets/coco/val2017/'
-    MAX_IMAGES = 10000
+    MAX_IMAGES = 100
     coco_gt = COCO(VAL_GT)
+    COCO_GT = COCO(TRAIN_GT)
     image_ids = coco_gt.getImgIds()[:MAX_IMAGES]
+    IMAGE_IDS = COCO_GT.getImgIds()[:MAX_IMAGES]
     
     criterion = nn.CrossEntropyLoss()
     float_model = load_model(saved_model_dir+float_model_file).to('cpu')
@@ -373,10 +385,10 @@ def main():
     print_size_of_model(float_model)
 
     # if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
-    #   evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, float_model)
+    #   evaluate_coco(TRAIN_IMGS, set_name, IMAGE_IDS, COCO_GT, float_model)
     
 
-    # _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
+    # _eval(COCO_GT, IMAGE_IDS, f'{set_name}_bbox_results.json')
 
     #print('Evaluation accuracy on %d images, %2.2f'%(num_eval_batches * 50, top1.avg))
     #torch.jit.save(torch.jit.script(float_model), saved_model_dir + scripted_float_model_file)
@@ -400,16 +412,19 @@ def main():
     #print('\n Inverted Residual Block:After observer insertion \n\n', myModel.features[1].conv)
 
     # Calibrate with the training set
-    # if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
-    #   evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, myModel)
+    if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
+      evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, myModel)
     
 
-    # _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
-    # print('Post Training Quantization: Calibration done')
-
+    _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
+    print('Post Training Quantization: Calibration done')
+    for m in myModel.modules():
+      if isinstance(m, torch.ao.quantization.observer.HistogramObserver):
+        scale, zp = m.calculate_qparams()
+        print(scale, zp)
     # Convert to quantized model
     torch.ao.quantization.convert(myModel, inplace=True)
-    #print('Post Training Quantization: Convert done')
+    print('Post Training Quantization: Convert done')
     #print('\n Inverted Residual Block: After fusion and quantization, note fused modules: \n\n',myModel.features[1].conv)
 
     print("Size of model after quantization")
