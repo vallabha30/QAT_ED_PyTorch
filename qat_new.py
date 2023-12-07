@@ -437,7 +437,7 @@ def train(opt):
     model = ModelWithLoss(model, debug=opt.debug)
 
     if params.num_gpus > 0:
-        model = model.cuda()
+        model = model
         if params.num_gpus > 1:
             model = CustomDataParallel(model, params.num_gpus)
             if use_sync_bn:
@@ -529,8 +529,8 @@ def train(opt):
                         annot = data['annot']
 
                         if params.num_gpus == 1:
-                            imgs = imgs.cuda()
-                            annot = annot.cuda()
+                            imgs = imgs
+                            annot = annot
 
                         cls_loss, reg_loss = model(imgs, annot, obj_list=params.obj_list)
                         cls_loss = cls_loss.mean()
@@ -744,11 +744,11 @@ def main():
     print("Size of baseline model")
     print_size_of_model(float_model)
 
-    if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
-      evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, float_model)
+    # if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
+    #   evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, float_model)
     
 
-    _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
+    # _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
 
 #<--------------------------QAT--------------------------------------->
 
