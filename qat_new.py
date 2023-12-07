@@ -175,13 +175,7 @@ class EfficientDetBackbone(nn.Module):
         # Fuse BiFPN layers
         for m in self.bifpn.modules():
             if type(m) == SeparableConvBlock:
-                fuse_modules(m, ['depthwise_conv','pointwise_conv','bn','swish'], inplace=True)
-            if type(m) == MaxPool2dStaticSamePadding:
-                fuse_modules(m, ['pool'], inplace=True)
-            if type(m) == Conv2dStaticSamePadding:
-                fuse_modules(m, ['conv'], inplace=True)
-            if type(m) == Bn2dWrapper:
-                fuse_modules(m, ['bn'], inplace=True)
+                fuse_modules(m, ['depthwise_conv','pointwise_conv','bn','swish'], inplace=True)      
         
         # Fuse Regressor layers
         for m in self.regressor.modules():
