@@ -170,18 +170,23 @@ class EfficientDetBackbone(nn.Module):
 
         return features , regression, classification, anchors
               
-    def fuse_model(self):
-        fuse_modules = torch.quantization.fuse_modules
-
+    def fuse_model(self, is_qat=False):
+        fuse_modules = torch.ao.quantization.fuse_modules_qat if is_qat else torch.ao.quantization.fuse_modules
         # Fuse BiFPN layers
-        #for m in self.bifpn.modules():
-            #if type(m) == BiFPN:
-                #fuse_modules(m, ['conv', 'bn'], inplace=True)
-
+        for m in self.bifpn.modules():
+            if type(m) == SeparableConvBlock:
+                fuse_modules(m, ['depthwise_conv','pointwise_conv','bn','swish'], inplace=True)
+            if type(m) == MaxPool2dStaticSamePadding:
+                fuse_modules(m, ['pool'], inplace=True)
+            if type(m) == Conv2dStaticSamePadding:
+                fuse_modules(m, ['conv'], inplace=True)
+            if type(m) == Bn2dWrapper:
+                fuse_modules(m, ['bn'], inplace=True)
+        
         # Fuse Regressor layers
-        #for m in self.regressor.modules():
-            #if type(m) == SeparableConvBlock:
-                #fuse_modules(m, ['conv', 'bn'], inplace=True)
+        for m in self.regressor.modules():
+            if type(m) == SeparableConvBlock:
+                fuse_modules(m, ['conv', 'bn','swish'], inplace=True)
 
         # Fuse QAT_Classifier layers
         for m in self.classifier.modules():
