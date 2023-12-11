@@ -257,8 +257,8 @@ def evaluate(model, criterion, data_loader, neval_batches):
     cnt = 0
     with torch.no_grad():
         for image, target in data_loader:
-            output = model(image)
-            loss = criterion(output, target)
+            features , regression, classification, anchors = model(image)
+            loss = criterion(classification, target)
             cnt += 1
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
             print('.', end = '')
