@@ -445,7 +445,8 @@ def main():
 # QAT takes time and one needs to train over a few epochs.
 # Train and check accuracy after each epoch
     for nepoch in range(8):
-        train(opt)
+        qat_model.train()
+        
         if nepoch > 3:
             # Freeze quantizer parameters
             qat_model.apply(torch.ao.quantization.disable_observer)
