@@ -1,6 +1,8 @@
 import os
 import torch
 import numpy as np
+from torchvision import transforms
+from PIL import Image
 
 from torch.utils.data import Dataset, DataLoader
 from pycocotools.coco import COCO
@@ -107,6 +109,7 @@ def collater(data):
     return {'img': imgs, 'annot': annot_padded, 'scale': scales}
 
 
+
 class Resizer(object):
     """Convert ndarrays in sample to Tensors."""
     
@@ -169,3 +172,27 @@ class Normalizer(object):
         image, annots = sample['img'], sample['annot']
 
         return {'img': ((image.astype(np.float32) - self.mean) / self.std), 'annot': annots}
+
+
+desired_height, desired_width = 512,512
+def custom_collate(batch):
+    # Assuming batch is a list of tuples (image, target)
+    images, targets = zip(*batch)
+    
+    # Convert tensors to PIL Images if they are tensors
+    images = [img if isinstance(img, Image.Image) else transforms.ToPILImage()(img) for img in images]
+    
+    # Resize images to a uniform size using torchvision transforms
+    preprocess = transforms.Compose([
+        transforms.Resize((desired_height, desired_width)),  # Specify your desired dimensions
+        transforms.ToTensor()  # Convert images to PyTorch tensors
+    ])
+    
+    # Apply transformations to each image in the batch
+    images = [preprocess(img) for img in images]
+    
+    # Stack images to form a batch
+    images = torch.stack(images, dim=0)
+    
+    return images, targets
+
