@@ -36,6 +36,7 @@ from utils.utils import replace_w_sync_bn, CustomDataParallel, get_last_weights,
 from efficientdet.model import BiFPN, Regressor, QAT_Classifier, EfficientNet
 from efficientdet.utils import Anchors
 from efficientnet.utils_extra import Conv2dStaticSamePadding, MaxPool2dStaticSamePadding, Bn2dWrapper
+from train import train , get_args
 
 from torchvision.datasets import CocoDetection
 from torch.nn.functional import interpolate
@@ -235,7 +236,7 @@ gpu = args.device
 use_float16 = args.float16
 override_prev_results = args.override
 project_name = args.project
-weights_path = f'/content/QAT_ED_PyTorch/weights/efficientdet-d0_updated.pth' if args.weights is None else args.weights
+weights_path = f'/content/QAT_ED_PyTorch/weights/efficientdet-d0_updated' if args.weights is None else args.weights
 
 params = yaml.safe_load(open(f'/content/QAT_ED_PyTorch/projects/coco.yml'))
 obj_list = params['obj_list']
@@ -330,7 +331,7 @@ class Params:
 def load_model(model_file):
     params = Params(f'/content/QAT_ED_PyTorch/projects/coco.yml')
     model = EfficientDetBackbone(num_classes=len(params.obj_list),compound_coef=0,ratios=eval(params.anchors_ratios), scales=eval(params.anchors_scales))
-    model.load_state_dict(torch.load(model_file, map_location=torch.device('cpu')), strict=False)
+    model.load_state_dict(torch.load(model_file, map_location=torch.device('cpu')))
 
     model.requires_grad_(False)
     return model
@@ -347,7 +348,7 @@ def print_size_of_model(model):
 def main():
 
     saved_model_dir = '/content/QAT_ED_PyTorch/weights'
-    float_model_file = '/efficientdet-d0_updated.pth'
+    float_model_file = '/efficientdet-d0_updated'
     scripted_float_model_file = 'efficientdet_quantization_scripted.pth'
     scripted_quantized_model_file = 'efficientdet_quantization_scripted_quantized.pth'
     SET_NAME = params['val_set']
@@ -430,27 +431,40 @@ def main():
     print("Size of model after quantization")
     print_size_of_model(myModel)
 
-    if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
-      evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, myModel)
-    
+    qat_model = load_model(saved_model_dir + float_model_file)
+    qat_model.fuse_model(is_qat=True)
 
-    _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
+    optimizer = torch.optim.SGD(qat_model.parameters(), lr = 0.0001)
+    # The old 'fbgemm' is still available but 'x86' is the recommended default.
+    qat_model.qconfig = torch.ao.quantization.get_default_qat_qconfig('x86')
 
-    per_channel_quantized_model = load_model(saved_model_dir + float_model_file)
-    per_channel_quantized_model.eval()
-    per_channel_quantized_model.fuse_model()
-# The old 'fbgemm' is still available but 'x86' is the recommended default.
-    per_channel_quantized_model.qconfig = torch.ao.quantization.get_default_qconfig('x86')
-    print(per_channel_quantized_model.qconfig)
+    torch.ao.quantization.prepare_qat(qat_model, inplace=True)
 
-    torch.ao.quantization.prepare(per_channel_quantized_model, inplace=True)
+    num_train_batches = 20
 
-    torch.ao.quantization.convert(per_channel_quantized_model, inplace=True)
-    
+# QAT takes time and one needs to train over a few epochs.
+# Train and check accuracy after each epoch
+    for nepoch in range(8):
+        train(opt)
+        if nepoch > 3:
+            # Freeze quantizer parameters
+            qat_model.apply(torch.ao.quantization.disable_observer)
+        if nepoch > 2:
+            # Freeze batch norm mean and variance estimates
+            qat_model.apply(torch.nn.intrinsic.qat.freeze_bn_stats)
 
+        # Check the accuracy after each epoch
+        quantized_model = torch.ao.quantization.convert(qat_model.eval(), inplace=False)
+        quantized_model.eval()
+        if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
+          evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, myModel)
+        
+
+        _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
 
 
 if __name__ == "__main__":
+    opt = get_args()
     main()
 
     
