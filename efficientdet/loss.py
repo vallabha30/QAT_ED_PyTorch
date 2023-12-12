@@ -54,21 +54,21 @@ class FocalLoss(nn.Module):
             classification = torch.clamp(classification, 1e-4, 1.0 - 1e-4)
             
             if bbox_annotation.shape[0] == 0:
-                if torch.cuda.is_available():
+                # if torch.cuda.is_available():
                     
-                    alpha_factor = torch.ones_like(classification) * alpha
-                    alpha_factor = alpha_factor.cuda()
-                    alpha_factor = 1. - alpha_factor
-                    focal_weight = classification
-                    focal_weight = alpha_factor * torch.pow(focal_weight, gamma)
+                #     alpha_factor = torch.ones_like(classification) * alpha
+                #     alpha_factor = alpha_factor.cuda()
+                #     alpha_factor = 1. - alpha_factor
+                #     focal_weight = classification
+                #     focal_weight = alpha_factor * torch.pow(focal_weight, gamma)
                     
-                    bce = -(torch.log(1.0 - classification))
+                #     bce = -(torch.log(1.0 - classification))
                     
-                    cls_loss = focal_weight * bce
+                #     cls_loss = focal_weight * bce
                     
-                    regression_losses.append(torch.tensor(0).to(dtype).cuda())
-                    classification_losses.append(cls_loss.sum())
-                else:
+                #     regression_losses.append(torch.tensor(0).to(dtype).cuda())
+                #     classification_losses.append(cls_loss.sum())
+                # else:
                     
                     alpha_factor = torch.ones_like(classification) * alpha
                     alpha_factor = 1. - alpha_factor
@@ -82,7 +82,7 @@ class FocalLoss(nn.Module):
                     regression_losses.append(torch.tensor(0).to(dtype))
                     classification_losses.append(cls_loss.sum())
 
-                continue
+                    continue
                 
             IoU = calc_iou(anchor[:, :], bbox_annotation[:, :4])
 
@@ -91,7 +91,7 @@ class FocalLoss(nn.Module):
             # compute the loss for classification
             targets = torch.ones_like(classification) * -1
             if torch.cuda.is_available():
-                targets = targets.cuda()
+                targets = targets
 
             targets[torch.lt(IoU_max, 0.4), :] = 0
 
@@ -106,7 +106,7 @@ class FocalLoss(nn.Module):
 
             alpha_factor = torch.ones_like(targets) * alpha
             if torch.cuda.is_available():
-                alpha_factor = alpha_factor.cuda()
+                alpha_factor = alpha_factor
 
             alpha_factor = torch.where(torch.eq(targets, 1.), alpha_factor, 1. - alpha_factor)
             focal_weight = torch.where(torch.eq(targets, 1.), 1. - classification, classification)
@@ -118,7 +118,7 @@ class FocalLoss(nn.Module):
 
             zeros = torch.zeros_like(cls_loss)
             if torch.cuda.is_available():
-                zeros = zeros.cuda()
+                zeros = zeros
             cls_loss = torch.where(torch.ne(targets, -1.0), cls_loss, zeros)
 
             classification_losses.append(cls_loss.sum() / torch.clamp(num_positive_anchors.to(dtype), min=1.0))
@@ -158,7 +158,7 @@ class FocalLoss(nn.Module):
                 regression_losses.append(regression_loss.mean())
             else:
                 if torch.cuda.is_available():
-                    regression_losses.append(torch.tensor(0).to(dtype).cuda())
+                    regression_losses.append(torch.tensor(0).to(dtype))
                 else:
                     regression_losses.append(torch.tensor(0).to(dtype))
 
