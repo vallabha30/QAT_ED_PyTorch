@@ -143,10 +143,6 @@ class EfficientDetBackbone(nn.Module):
 
         self.backbone_net = EfficientNet(self.backbone_compound_coef[compound_coef], load_weights)
         self.dequant=DeQuantStub()
-        # # Attach observers to specific layers in your model
-        self.bn1 = Bn2dWrapper(64)  # Replace with actual batch norm layer
-        self.bn2 = Bn2dWrapper(128)  # Replace with actual batch norm layer
-        # # Add more observers for other layers as needed
 
     def freeze_bn(self):
         for m in self.modules():
@@ -212,14 +208,14 @@ args = ap.parse_args()
 
 compound_coef = args.compound_coef
 nms_threshold = args.nms_threshold
-use_cuda = args.cuda
-gpu = args.device
+#use_cuda = args.cuda
+#gpu = args.device
 use_float16 = args.float16
 override_prev_results = args.override
 project_name = args.project
-weights_path = f'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/weights/updated_model_weights.pth' if args.weights is None else args.weights
+weights_path = f'/content/QAT_ED_PyTorch/weights/efficientdet-d0_updated' if args.weights is None else args.weights
 
-params = yaml.safe_load(open(f'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/projects/coco.yml'))
+params = yaml.safe_load(open(f'/content/QAT_ED_PyTorch/projects/coco.yml'))
 obj_list = params['obj_list']
 
 input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
@@ -302,15 +298,15 @@ def _eval(coco_gt, image_ids, pred_json_path):
 
 class Params:
     def __init__(self, project_file):
-        self.params = yaml.safe_load(open(project_file).read())
+        self.params = yaml.safe_load(open('/content/QAT_ED_PyTorch/projects/coco.yml').read())
 
     def __getattr__(self, item):
         return self.params.get(item, None)
   
 def load_model(model_file):
-    params = Params(f'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/projects/coco.yml')
+    params = Params(f'/content/QAT_ED_PyTorch/projects/coco.yml')
     model = EfficientDetBackbone(num_classes=len(params.obj_list),compound_coef=0,ratios=eval(params.anchors_ratios), scales=eval(params.anchors_scales))
-    model.load_state_dict(torch.load(model_file, map_location=torch.device('cpu')),strict=False)
+    model.load_state_dict(torch.load(model_file, map_location=torch.device('cpu')))
 
     model.requires_grad_(False)
     return model
@@ -338,27 +334,27 @@ class ModelWithLoss(nn.Module):
 
 def traininig_loop(model):
     model.train()
-    params = Params(f'projects/coco.yml')
-    training_params = {'batch_size': 4,
+    params = Params(f'/content/QAT_ED_PyTorch/projects/coco.yml')
+    training_params = {'batch_size': 12,
                        'shuffle': True,
                        'drop_last': True,
                        'collate_fn': collater,
-                       'num_workers': 4}
+                       'num_workers':2}
 
-    val_params = {'batch_size': 4,
+    val_params = {'batch_size': 12,
                   'shuffle': False,
                   'drop_last': True,
                   'collate_fn': collater,
-                  'num_workers': 4}
+                  'num_workers': 2}
 
     input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
-    training_set = CocoDataset(root_dir=os.path.join('datasets/', 'coco'), set=params.train_set,
+    training_set = CocoDataset(root_dir=os.path.join('/content/QAT_ED_PyTorch/datasets/', 'coco'), set=params.train_set,
                                transform=transforms.Compose([Normalizer(mean=params.mean, std=params.std),
                                                              Augmenter(),
                                                              Resizer(input_sizes[0])]))
     training_generator = DataLoader(training_set, **training_params)
 
-    val_set = CocoDataset(root_dir=os.path.join('datasets/', params.project_name), set=params.val_set,
+    val_set = CocoDataset(root_dir=os.path.join('/content/QAT_ED_PyTorch/datasets/', params.project_name), set=params.val_set,
                           transform=transforms.Compose([Normalizer(mean=params.mean, std=params.std),
                                                         Resizer(input_sizes[0])]))
     val_generator = DataLoader(val_set, **val_params)
@@ -414,7 +410,7 @@ def traininig_loop(model):
     #     use_sync_bn = False
 
     # writer = SummaryWriter('logs/' + f'/{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}/')
-    model = ModelWithLoss(model, debug=False)
+    model = ModelWithLoss(model, debug=False).to('cpu')
     # if params.num_gpus > 0:
     #     model = model
     #     if params.num_gpus > 1:
@@ -443,8 +439,8 @@ def traininig_loop(model):
     #         continue
 
     #         epoch_loss = []
-    # progress_bar = tqdm(training_generator)
-    for iter, data in enumerate(training_generator):
+    progress_bar = tqdm(val_generator)
+    for iter, data in enumerate(progress_bar):
         # if iter < step - last_epoch * num_iter_per_epoch:
         #     progress_bar.update()
         #     continue
@@ -558,16 +554,16 @@ def traininig_loop(model):
 
 def main():
 
-    saved_model_dir = 'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/weights'
-    float_model_file = '/updated_model_weights.pth'
+    saved_model_dir = '/content/QAT_ED_PyTorch/weights'
+    float_model_file = '/efficientdet-d0_updated'
     scripted_float_model_file = 'efficientdet_quantization_scripted.pth'
     scripted_quantized_model_file = 'efficientdet_quantization_scripted_quantized.pth'
     SET_NAME = params['val_set']
     set_name = params['train_set']
-    TRAIN_GT=f'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/datasets/coco/annotations/instances_train2017.json'
-    TRAIN_IMGS=f'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/datasets/coco/train2017'
-    VAL_GT = f'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/datasets/coco/annotations/instances_val2017.json'
-    VAL_IMGS = f'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/datasets/coco/val2017'
+    TRAIN_GT=f'/content/QAT_ED_PyTorch/datasets/coco/annotations/instances_train2017.json'
+    TRAIN_IMGS=f'/content/QAT_ED_PyTorch/datasets/coco/train2017'
+    VAL_GT = f'/content/QAT_ED_PyTorch/datasets/coco/annotations/instances_val2017.json'
+    VAL_IMGS = f'/content/QAT_ED_PyTorch/datasets/coco/val2017'
     MAX_IMAGES = 100
     coco_gt = COCO(VAL_GT)
     COCO_GT = COCO(TRAIN_GT)
@@ -647,7 +643,7 @@ def main():
 
 # QAT takes time and one needs to train over a few epochs.
 # Train and check accuracy after each epoch
-    for nepoch in range(8):
+    for nepoch in range(1):
         traininig_loop(qat_model)        
         if nepoch > 3:
             # Freeze quantizer parameters
