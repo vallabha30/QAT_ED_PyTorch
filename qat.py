@@ -7,9 +7,7 @@ import torch
 import torch.nn as nn
 import yaml
 import json
-import datetime
 from torch import nn
-import traceback
 import numpy as np
 from torch.ao.quantization import QuantStub, DeQuantStub
 from pycocotools.coco import COCO
@@ -17,12 +15,10 @@ from pycocotools.cocoeval import COCOeval
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from torch.autograd import Variable
-from utils.sync_batchnorm import patch_replication_callback
-from tensorboardX import SummaryWriter
 
 from efficientdet.dataset import CocoDataset, Resizer, Normalizer, Augmenter, collater
 from efficientdet.utils import BBoxTransform, ClipBoxes
-from utils.utils import preprocess, invert_affine, postprocess, boolean_string ,boolean_string ,get_last_weights,init_weights,replace_w_sync_bn,CustomDataParallel
+from utils.utils import preprocess, invert_affine, postprocess, boolean_string ,boolean_string ,get_last_weights
 from efficientnet import EfficientNet 
 from efficientnet.utils import MemoryEfficientSwish, Swish
 from efficientdet.loss import FocalLoss
@@ -58,10 +54,6 @@ class SeparableConvBlock(nn.Module):
         if out_channels is None:
             out_channels = in_channels
 
-        # Q: whether separate conv
-        #  share bias between depthwise_conv and pointwise_conv
-        #  or just pointwise_conv apply bias.
-        # A: Confirmed, just pointwise_conv applies bias, depthwise_conv has no bias.
         self.quant=QuantStub()
         self.depthwise_conv = Conv2dStaticSamePadding(in_channels, in_channels,
                                                       kernel_size=3, stride=1, groups=in_channels, bias=False)
@@ -143,6 +135,7 @@ class EfficientDetBackbone(nn.Module):
 
         self.backbone_net = EfficientNet(self.backbone_compound_coef[compound_coef], load_weights)
         self.dequant=DeQuantStub()
+        
 
     def freeze_bn(self):
         for m in self.modules():
@@ -157,24 +150,20 @@ class EfficientDetBackbone(nn.Module):
         regression = self.regressor(features)
         classification = self.classifier(features)
         anchors = self.anchors(inputs, inputs.dtype)
-        # features=self.quant(features)
-        # features=self.dequant(features)
 
         return features , regression, classification, anchors 
         
     def fuse_model(self, is_qat=False):
         fuse_modules = torch.ao.quantization.fuse_modules_qat if is_qat else torch.ao.quantization.fuse_modules
-        # Fuse BiFPN layers
+
         for m in self.bifpn.modules():
             if type(m) == SeparableConvBlock:
                 fuse_modules(m, ['depthwise_conv','pointwise_conv','bn','swish'], inplace=True)      
         
-        # Fuse Regressor layers
         for m in self.regressor.modules():
             if type(m) == SeparableConvBlock:
                 fuse_modules(m, ['depthwise_conv','pointwise_conv','bn','swish'], inplace=True)
 
-        # Fuse QAT_Classifier layers
         for m in self.classifier.modules():
             if type(m) == SeparableConvBlock:
                 fuse_modules(m, ['depthwise_conv','pointwise_conv','bn','swish'], inplace=True)
@@ -186,13 +175,7 @@ class EfficientDetBackbone(nn.Module):
             print(ret)
         except RuntimeError as e:
             print('Ignoring ' + str(e) + '"')
-    def prepare_for_quantization(self):
-        # Apply observers to specific layers
-        torch.quantization.prepare_qat(self, inplace=True)
-    def convert_to_quantized(self):
-        # Convert model to quantized
-        torch.quantization.convert(self, inplace=True)
-
+    
 #<---------HELPER FUNCTIONS----------->
 
 ap = argparse.ArgumentParser()
@@ -208,8 +191,8 @@ args = ap.parse_args()
 
 compound_coef = args.compound_coef
 nms_threshold = args.nms_threshold
-#use_cuda = args.cuda
-#gpu = args.device
+use_cuda = args.cuda
+gpu = args.device
 use_float16 = args.float16
 override_prev_results = args.override
 project_name = args.project
@@ -339,13 +322,13 @@ def traininig_loop(model):
                        'shuffle': True,
                        'drop_last': True,
                        'collate_fn': collater,
-                       'num_workers':2}
+                       'num_workers': 4}
 
     val_params = {'batch_size': 12,
                   'shuffle': False,
                   'drop_last': True,
                   'collate_fn': collater,
-                  'num_workers': 2}
+                  'num_workers': 4}
 
     input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
     training_set = CocoDataset(root_dir=os.path.join('/content/QAT_ED_PyTorch/datasets/', 'coco'), set=params.train_set,
@@ -369,90 +352,22 @@ def traininig_loop(model):
             last_step = int(os.path.basename(weights_path).split('_')[-1].split('.')[0])
         except:
             last_step = 0
-    
-    # if load_weights is not None:
-    #     if load_weights.endswith('.pth'):
-    #         weights_path = load_weights
-    #     else:
-    #         weights_path = get_last_weights('logs/')
-    #     try:
-    #         last_step = int(os.path.basename(weights_path).split('_')[-1].split('.')[0])
-    #     except:
-    #         last_step = 0
-
-    #     try:
-    #         ret = model.load_state_dict(torch.load(weights_path), strict=False)
-    #     except RuntimeError as e:
-    #         print(f'[Warning] Ignoring {e}')
-    #         print(
-    #             '[Warning] Don\'t panic if you see this, this might be because you load a pretrained weights with different number of classes. The rest of the weights should be loaded already.')
-
-    #     print(f'[Info] loaded weights: {os.path.basename(weights_path)}, resuming checkpoint from step: {last_step}')
+        
     else:
         last_step = 0
-    #     print('[Info] initializing weights...')
-    #     init_weights(model)
-    # head_only=False
-    # if head_only:
-    #     def freeze_backbone(m):
-    #         classname = m.__class__.__name__
-    #         for ntl in ['EfficientNet', 'BiFPN']:
-    #             if ntl in classname:
-    #                 for param in m.parameters():
-    #                     param.requires_grad = False
 
-    #     model.apply(freeze_backbone)
-    #     print('[Info] freezed backbone')
-    # if params.num_gpus > 1 and 4 // params.num_gpus < 4:
-    #     model.apply(replace_w_sync_bn)
-    #     use_sync_bn = True
-    # else:
-    #     use_sync_bn = False
-
-    # writer = SummaryWriter('logs/' + f'/{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}/')
-    model = ModelWithLoss(model, debug=False).to('cpu')
-    # if params.num_gpus > 0:
-    #     model = model
-    #     if params.num_gpus > 1:
-    #         model = CustomDataParallel(model, params.num_gpus)
-    #         if use_sync_bn:
-    #             patch_replication_callback(model)
+    model = ModelWithLoss(model, debug=False)
+       
     optim='adamw'
     if optim == 'adamw':
             optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
     else:
         optimizer = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9, nesterov=True)
-
-    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, verbose=True)
-    epoch = 0
-    best_loss = 1e5
-    best_epoch = 0
-    step = max(0, last_step)
-    # model.train()
-
-    #num_iter_per_epoch = len(training_generator)
-    # num_iter_per_epoch = 10
-    # # try:
-    # for epoch in range(500):
-    #     last_epoch = step // num_iter_per_epoch
-    #     if epoch < last_epoch:
-    #         continue
-
-    #         epoch_loss = []
+   
     progress_bar = tqdm(val_generator)
     for iter, data in enumerate(progress_bar):
-        # if iter < step - last_epoch * num_iter_per_epoch:
-        #     progress_bar.update()
-        #     continue
-    #             try:
         imgs = data['img']
         annot = data['annot']
-
-        #                 if params.num_gpus == 1:
-        #                     # if only one gpu, just send it to cuda:0
-        #                     # elif multiple gpus, send it to multiple gpus in CustomDataParallel, not here
-        #                     imgs = imgs
-        #                     annot = annot
 
         optimizer.zero_grad()
         cls_loss, reg_loss = model(imgs, annot, obj_list=params.obj_list)
@@ -460,176 +375,48 @@ def traininig_loop(model):
         reg_loss = reg_loss.mean()
         loss = cls_loss + reg_loss
         loss = Variable(loss, requires_grad = True)
+        if loss == 0 or not torch.isfinite(loss):
+            continue
         loss.backward()
-        # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
-        optimizer.step()
-#                     epoch_loss.append(float(loss))
-
-#                     progress_bar.set_description(
-#                         'Step: {}. Epoch: {}/{}. Iteration: {}/{}. Cls loss: {:.5f}. Reg loss: {:.5f}. Total loss: {:.5f}'.format(
-#                             step, epoch, 500, iter + 1, num_iter_per_epoch, cls_loss.item(),
-#                             reg_loss.item(), loss.item()))
-#                     writer.add_scalars('Loss', {'train': loss}, step)
-#                     writer.add_scalars('Regression_loss', {'train': reg_loss}, step)
-#                     writer.add_scalars('Classfication_loss', {'train': cls_loss}, step)
-
-#                     # log learning_rate
-#                     current_lr = optimizer.param_groups[0]['lr']
-#                     writer.add_scalar('learning_rate', current_lr, step)
-
-#                     step += 1
-
-#                     if step % 500 == 0 and step > 0:
-#                         save_checkpoint(model, f'efficientdet-d{0}_{epoch}_{step}.pth')
-#                         print('checkpoint...')
-
-#                 except Exception as e:
-#                     print('[Error]', traceback.format_exc())
-#                     print(e)
-#                     continue
-#             scheduler.step(np.mean(epoch_loss))
-
-#             if epoch % 1 == 0:
-#                 model.eval()
-#                 loss_regression_ls = []
-#                 loss_classification_ls = []
-#                 for iter, data in enumerate(val_generator):
-#                     with torch.no_grad():
-#                         imgs = data['img']
-#                         annot = data['annot']
-
-#                         if params.num_gpus == 1:
-#                             imgs = imgs
-#                             annot = annot
-
-#                         cls_loss, reg_loss = model(imgs, annot, obj_list=params.obj_list)
-#                         cls_loss = cls_loss.mean()
-#                         reg_loss = reg_loss.mean()
-
-#                         loss = cls_loss + reg_loss
-#                         if loss == 0 or not torch.isfinite(loss):
-#                             continue
-
-#                         loss_classification_ls.append(cls_loss.item())
-#                         loss_regression_ls.append(reg_loss.item())
-
-#                 cls_loss = np.mean(loss_classification_ls)
-#                 reg_loss = np.mean(loss_regression_ls)
-#                 loss = cls_loss + reg_loss
-
-#                 print(
-#                     'Val. Epoch: {}/{}. Classification loss: {:1.5f}. Regression loss: {:1.5f}. Total loss: {:1.5f}'.format(
-#                         epoch, 500, cls_loss, reg_loss, loss))
-#                 writer.add_scalars('Loss', {'val': loss}, step)
-#                 writer.add_scalars('Regression_loss', {'val': reg_loss}, step)
-#                 writer.add_scalars('Classfication_loss', {'val': cls_loss}, step)
-
-#                 if loss + 0.0 < best_loss:
-#                     best_loss = loss
-#                     best_epoch = epoch
-
-#                     save_checkpoint(model, f'efficientdet-d{0}_{epoch}_{step}.pth')
-
-#                 model.train()
-
-#                 # Early stopping
-#                 if epoch - best_epoch > 0 > 0:
-#                     print('[Info] Stop training at epoch {}. The lowest loss achieved is {}'.format(epoch, best_loss))
-#                     break
-#     except KeyboardInterrupt:
-#         save_checkpoint(model, f'efficientdet-d{0}_{epoch}_{step}.pth')
-#         writer.close()
-#     writer.close()
-
-
-# def save_checkpoint(model, name):
-#     if isinstance(model, CustomDataParallel):
-#         torch.save(model.module.model.state_dict(), os.path.join('logs/', name))
-#     else:
-#         torch.save(model.model.state_dict(), os.path.join('logs/', name))
-    
+                    # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
+        optimizer.step()        
+        
     return
 #<---------DEFINE DATASET AND DATALOADERS----------->
 
 
 def main():
 
-    saved_model_dir = '/content/QAT_ED_PyTorch/weights'
-    float_model_file = '/efficientdet-d0_updated'
-    scripted_float_model_file = 'efficientdet_quantization_scripted.pth'
-    scripted_quantized_model_file = 'efficientdet_quantization_scripted_quantized.pth'
+    saved_model_dir = '/content/QAT_ED_PyTorch/weights/'
+    float_model_file = 'efficientdet-d0_updated'
+    scripted_quantized_model_file = 'Efficientdet-d0-qat.pth'
     SET_NAME = params['val_set']
-    set_name = params['train_set']
-    TRAIN_GT=f'/content/QAT_ED_PyTorch/datasets/coco/annotations/instances_train2017.json'
-    TRAIN_IMGS=f'/content/QAT_ED_PyTorch/datasets/coco/train2017'
     VAL_GT = f'/content/QAT_ED_PyTorch/datasets/coco/annotations/instances_val2017.json'
     VAL_IMGS = f'/content/QAT_ED_PyTorch/datasets/coco/val2017'
-    MAX_IMAGES = 100
+    MAX_IMAGES = 100 #default= 10000
     coco_gt = COCO(VAL_GT)
-    COCO_GT = COCO(TRAIN_GT)
     image_ids = coco_gt.getImgIds()[:MAX_IMAGES]
-    IMAGE_IDS = COCO_GT.getImgIds()[:MAX_IMAGES]
     
-    criterion = nn.CrossEntropyLoss()
     float_model = load_model(saved_model_dir+float_model_file).to('cpu')
        
     if use_float16:
       float_model.half()
-    # Next, we'll "fuse modules"; this can both make the model faster by saving on memory access
-    # while also improving numerical accuracy. While this can be used with any model, this is
-    # especially common with quantized models.
-
+ 
     float_model.eval()
 
     # Fuses modules
     float_model.fuse_model()
-    # Note fusion of Conv+BN+Relu and Conv+Relu
-
-#<---------BASELINE ACCURACY----------->
     
-    num_eval_batches = 1000
+#<---------BASELINE ACCURACY----------->
 
     print("Size of baseline model")
     print_size_of_model(float_model)
 
-    # if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
-    #   evaluate_coco(TRAIN_IMGS, set_name, IMAGE_IDS, COCO_GT, float_model)
+    if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
+      evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, float_model)
     
 
-    # _eval(COCO_GT, IMAGE_IDS, f'{set_name}_bbox_results.json')
-
-    #torch.jit.save(torch.jit.script(float_model), saved_model_dir + scripted_float_model_file)
-
-#<-------------------POST STATIC TRAINING QUANTIZATION----------------------------->
-   
-    num_calibration_batches = 32
-
-    myModel = load_model(saved_model_dir + float_model_file).to('cpu')
-    myModel.eval()
-
-    # Fuse Conv, bn and relu
-    myModel.fuse_model()
-
-    # Specify quantization configuration
-    # Start with simple min/max range estimation and per-tensor quantization of weights
-    myModel.qconfig = torch.ao.quantization.default_qconfig
-    print(myModel.qconfig)
-    torch.ao.quantization.prepare(myModel, inplace=True)
-
-
-    # Calibrate with the training set
-    print('Post Training Quantization: Calibration done')
-    for m in myModel.modules():
-      if isinstance(m, torch.ao.quantization.observer.HistogramObserver):
-        scale, zp = m.calculate_qparams()
-        print(scale, zp)
-    # Convert to quantized model
-    torch.ao.quantization.convert(myModel, inplace=True)
-    print('Post Training Quantization: Convert done')
-    
-
-    print("Size of model after quantization")
-    print_size_of_model(myModel)
+    _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')  
 
 #<-------------------QAT----------------------------->
 
@@ -637,30 +424,28 @@ def main():
     qat_model.fuse_model(is_qat=True)
     qat_model.qconfig = torch.ao.quantization.get_default_qat_qconfig('x86')
 
-    torch.ao.quantization.prepare_qat(qat_model, inplace=True)
-
-    num_train_batches = 20
+    torch.ao.quantization.prepare_qat(qat_model, inplace=True)  
 
 # QAT takes time and one needs to train over a few epochs.
 # Train and check accuracy after each epoch
-    for nepoch in range(1):
+    for nepoch in range(5): #default nepoch = 500 
         traininig_loop(qat_model)        
-        if nepoch > 3:
-            # Freeze quantizer parameters
+        if nepoch > 3: #If default nepoch > 188
             qat_model.apply(torch.ao.quantization.disable_observer)
-        if nepoch > 2:
-            # Freeze batch norm mean and variance estimates
+        if nepoch > 2: # if default nepoch > 125
             qat_model.apply(torch.nn.intrinsic.qat.freeze_bn_stats)
-
-        # Check the accuracy after each epoch
-        quantized_model = torch.ao.quantization.convert(qat_model.eval(), inplace=False)
+    
+        quantized_model = torch.ao.quantization.convert(qat_model.eval(), inplace=True)
         quantized_model.eval()
+
+        print_size_of_model(qat_model)
         if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
-          evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, myModel)
-        
+            evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, qat_model)
+            
 
         _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
 
+    torch.jit.save(torch.jit.script(qat_model), saved_model_dir + scripted_quantized_model_file)
 
 if __name__ == "__main__":
     main()
