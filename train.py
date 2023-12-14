@@ -20,7 +20,7 @@ from backbone import EfficientDetBackbone
 from efficientdet.dataset import CocoDataset, Resizer, Normalizer, Augmenter, collater
 from efficientdet.loss import FocalLoss
 from utils.sync_batchnorm import patch_replication_callback
-from utils.utils import replace_w_sync_bn, CustomDataParallel, get_last_weights, init_weights, boolean_string
+from utils.utils import replace_w_sync_bn, CustomDataParallel, get_last_weights, init_weights, boolean_string,  CustomDataParallel
 
 
 class Params:
