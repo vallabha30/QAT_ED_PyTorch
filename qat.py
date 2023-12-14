@@ -400,7 +400,7 @@ def main():
     scripted_quantized_model_file = 'Efficientdet-d0-qat.pth'
     SET_NAME = params['val_set']
     VAL_GT = f'/content/QAT_ED_PyTorch/datasets/coco/annotations/instances_val2017.json'
-    VAL_IMGS = f'/content/QAT_ED_PyTorch/datasets/coco/val2017'
+    VAL_IMGS = f'/content/QAT_ED_PyTorch/datasets/coco/val2017/'
     MAX_IMAGES = 100 #default= 10000
     coco_gt = COCO(VAL_GT)
     image_ids = coco_gt.getImgIds()[:MAX_IMAGES]
