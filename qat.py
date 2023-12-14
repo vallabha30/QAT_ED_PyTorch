@@ -363,7 +363,7 @@ def traininig_loop(model):
             optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
     else:
         optimizer = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9, nesterov=True)
-   
+    
     progress_bar = tqdm(val_generator)
     for iter, data in enumerate(progress_bar):
         imgs = data['img']
@@ -379,9 +379,17 @@ def traininig_loop(model):
             continue
         loss.backward()
                     # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
-        optimizer.step()        
+        optimizer.step()   
         
+        save_checkpoint(qat_model, f'efficientdet-d{0}_QAT_{epoch}_{step}.pth')
     return
+
+def save_checkpoint(model, name):
+    if isinstance(model, CustomDataParallel):
+        torch.save(model.module.model.state_dict(), os.path.join('logs/', name))
+    else:
+        torch.save(model.model.state_dict(), os.path.join('logs/', name))
+
 #<---------DEFINE DATASET AND DATALOADERS----------->
 
 
@@ -445,8 +453,7 @@ def main():
 
         _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
 
-    torch.jit.save(torch.jit.script(qat_model), saved_model_dir + scripted_quantized_model_file)
-
+     save_checkpoint(qat_model, scripted_quantized_model_file)
 if __name__ == "__main__":
     main()
 
