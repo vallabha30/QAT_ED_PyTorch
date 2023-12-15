@@ -382,9 +382,9 @@ def traininig_loop(model):
 
 def save_checkpoint(model, name):
     if isinstance(model, CustomDataParallel):
-        torch.save(model.module.state_dict(), os.path.join('logs/', name))
+        torch.save(model.module.state_dict(), os.path.join('/content/QAT_ED_PyTorch/weights/', name))
     else:
-        torch.save(model.state_dict(), os.path.join('logs/', name))
+        torch.save(model.state_dict(), os.path.join('/content/QAT_ED_PyTorch/weights/', name))
 
 #<---------DEFINE DATASET AND DATALOADERS----------->
 
@@ -432,24 +432,24 @@ def main():
 
 # QAT takes time and one needs to train over a few epochs.
 # Train and check accuracy after each epoch
-    # for nepoch in range(5): #default nepoch = 500 
-    #     traininig_loop(qat_model)        
-    #     if nepoch > 3: #If default nepoch > 188
-    #         qat_model.apply(torch.ao.quantization.disable_observer)
-    #     if nepoch > 2: # if default nepoch > 125
-    #         qat_model.apply(torch.nn.intrinsic.qat.freeze_bn_stats)
+    for nepoch in range(500): #default nepoch = 500 
+        traininig_loop(qat_model)        
+        if nepoch > 188: #If default nepoch > 188
+            qat_model.apply(torch.ao.quantization.disable_observer)
+        if nepoch > 125: # if default nepoch > 125
+            qat_model.apply(torch.nn.intrinsic.qat.freeze_bn_stats)
     
-    quantized_model = torch.ao.quantization.convert(qat_model.eval(), inplace=True)
-    quantized_model.eval()
-
-    print_size_of_model(qat_model)
-    if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
-        evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, qat_model)
-        
-
-    _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
-
-    save_checkpoint(qat_model, scripted_quantized_model_file)
+        quantized_model = torch.ao.quantization.convert(qat_model.eval(), inplace=True)
+        quantized_model.eval()
+    
+        print_size_of_model(qat_model)
+        if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
+            evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, qat_model)
+            
+    
+        _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
+    
+        save_checkpoint(qat_model, scripted_quantized_model_file)
 if __name__ == "__main__":
     main()
 
