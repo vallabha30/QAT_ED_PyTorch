@@ -70,7 +70,6 @@ class SeparableConvBlock(nn.Module):
         self.dequant=DeQuantStub()
         
     def forward(self, x):
-        x = self.quant(x)
         x = self.depthwise_conv(x)
         x = self.pointwise_conv(x)
 
@@ -79,7 +78,6 @@ class SeparableConvBlock(nn.Module):
 
         if self.activation:
             x = self.swish(x)
-        x=self.dequant(x)
         return x
 
 class EfficientDetBackbone(nn.Module):
