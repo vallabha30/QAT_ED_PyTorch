@@ -5,7 +5,7 @@ from torch.ao.quantization import QuantStub, DeQuantStub
 
 from efficientnet import EfficientNet as EffNet
 from efficientnet.utils import MemoryEfficientSwish, Swish
-from efficientnet.utils_extra import Conv2dStaticSamePadding, MaxPool2dStaticSamePadding, Bn2dWrapper
+from efficientnet.utils_extra import Conv2dStaticSamePadding, MaxPool2dStaticSamePadding, Bn2dWrapper, UpsampleWrap, ParameterWrap
 
 
 def nms(dets, thresh):
@@ -43,7 +43,7 @@ class SeparableConvBlock(nn.Module):
         
 
     def forward(self, x):
-        x = self.quant(x)
+        
         x = self.depthwise_conv(x)
         x = self.pointwise_conv(x)
 
@@ -52,7 +52,7 @@ class SeparableConvBlock(nn.Module):
 
         if self.activation:
             x = self.swish(x)
-        x=self.dequant(x)
+        
         return x
   
 class BiFPN(nn.Module):
@@ -94,10 +94,10 @@ class BiFPN(nn.Module):
             self.conv8_down = SeparableConvBlock(num_channels, onnx_export=onnx_export)
 
         # Feature scaling layers
-        self.p6_upsample = nn.Upsample(scale_factor=2, mode='nearest')
-        self.p5_upsample = nn.Upsample(scale_factor=2, mode='nearest')
-        self.p4_upsample = nn.Upsample(scale_factor=2, mode='nearest')
-        self.p3_upsample = nn.Upsample(scale_factor=2, mode='nearest')
+        self.p6_upsample = UpsampleWrap(scale_factor=2, mode='nearest')
+        self.p5_upsample = UpsampleWrap(scale_factor=2, mode='nearest')
+        self.p4_upsample = UpsampleWrap(scale_factor=2, mode='nearest')
+        self.p3_upsample = UpsampleWrap(scale_factor=2, mode='nearest')
 
         self.p4_downsample = MaxPool2dStaticSamePadding(3, 2)
         self.p5_downsample = MaxPool2dStaticSamePadding(3, 2)
@@ -147,7 +147,7 @@ class BiFPN(nn.Module):
             )
 
         # Weight
-        self.p6_w1 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
+        self.p6_w1 =nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
         self.p6_w1_relu = nn.ReLU()
         self.p5_w1 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
         self.p5_w1_relu = nn.ReLU()
@@ -168,7 +168,7 @@ class BiFPN(nn.Module):
         self.attention = attention
 
     def forward(self, inputs):
-        # inputs= self.quant(inputs)
+        
         """
         illustration of a minimal bifpn unit
             P7_0 -------------------------> P7_2 -------->
@@ -195,35 +195,18 @@ class BiFPN(nn.Module):
             outs = self._forward_fast_attention(inputs)
         else:
             outs = self._forward(inputs)
-        #outs=self.dequant(outs)
+        
         return outs
 
     def _forward_fast_attention(self, inputs):
         
         if self.first_time:
-            #inputs = map(self.dequant, inputs)
-            p3, p4, p5 = inputs
-
-            p3=self.quant(p3)
-            p4=self.quant(p4)
-            p5 =self.quant(p5)       
+            p3, p4, p5 = inputs      
             p6_in = self.p5_to_p6(p5)
-            p6_in=self.dequant(p6_in)
-            p6_in=self.quant(p6_in)
             p7_in = self.p6_to_p7(p6_in)
-            p7_in=self.dequant(p7_in)
-            p7_in = self.quant(p7_in)
-
             p3_in = self.p3_down_channel(p3)
-            p3_in = self.dequant(p3_in)
-            p3_in = self.quant(p3_in)
             p4_in = self.p4_down_channel(p4)
-            p4_in = self.dequant(p4_in)
-            p4_in = self.quant(p4_in)
             p5_in = self.p5_down_channel(p5)
-            p5_in = self.dequant(p5_in)
-            p5_in = self.quant(p5_in)
-
         else:
             # P3_0, P4_0, P5_0, P6_0 and P7_0
             p3_in, p4_in, p5_in, p6_in, p7_in = inputs
@@ -232,85 +215,48 @@ class BiFPN(nn.Module):
 
         # Weights for P6_0 and P7_0 to P6_1
         p6_w1 = self.p6_w1_relu(self.p6_w1)
-
-        p6_w1 = self.quant(p6_w1)
-        p6_w1 = self.dequant(p6_w1)
         weight = p6_w1 / (torch.sum(p6_w1, dim=0) + self.epsilon)
-        weight = self.quant(weight)
-        # Connections for P6_0 and P7_0 to P6_1 respectively
-
-        p6_up = self.conv6_up(self.swish(self.f_add.add(self.f_add.mul(weight[0] , p6_in) , self.f_add.mul(weight[1] , self.p6_upsample(p7_in)))))
-        p6_up=self.dequant(p6_up)
-        p6_up=self.quant(p6_up)
-       
+         # Connections for P6_0 and P7_0 to P6_1 respectively
+        p6_up = self.conv6_up(self.swish((weight[0] * p6_in) +(weight[1] * self.p6_upsample(p7_in))))
         # Weights for P5_0 and P6_1 to P5_1
         p5_w1 = self.p5_w1_relu(self.p5_w1)
         weight = p5_w1 / (torch.sum(p5_w1, dim=0) + self.epsilon)
-        weight = self.quant(weight)
         # Connections for P5_0 and P6_1 to P5_1 respectively
-        p5_up = self.conv5_up(self.swish(self.f_add.add(self.f_add.mul(weight[0] , p5_in) , self.f_add.mul(weight[1] , self.p5_upsample(p6_up)))))
-        p5_up = self.quant(p5_up)
+        p5_up = self.conv5_up(self.swish((weight[0] * p5_in) +(weight[1] * self.p5_upsample(p6_up)))) 
         # Weights for P4_0 and P5_1 to P4_1
         p4_w1 = self.p4_w1_relu(self.p4_w1)
         weight = p4_w1 / (torch.sum(p4_w1, dim=0) + self.epsilon)
-        weight = self.quant(weight)
         # Connections for P4_0 and P5_1 to P4_1 respectively
-        p4_up = self.conv4_up(self.swish(self.f_add.add(self.f_add.mul(weight[0] , p4_in) , self.f_add.mul(weight[1] , self.p4_upsample(p5_up)))))
-        p4_up = self.quant(p4_up)
+        p4_up = self.conv4_up(self.swish((weight[0] * p4_in) + (weight[1] * self.p4_upsample(p5_up))))
         # Weights for P3_0 and P4_1 to P3_2
         p3_w1 = self.p3_w1_relu(self.p3_w1)
         weight = p3_w1 / (torch.sum(p3_w1, dim=0) + self.epsilon)
-        weight = self.quant(weight)
         # Connections for P3_0 and P4_1 to P3_2 respectively
-        p3_out = self.conv3_up(self.swish(self.f_add.add(self.f_add.mul(weight[0] , p3_in) , self.f_add.mul(weight[1] , self.p3_upsample(p4_up)))))
-        p3_out = self.quant(p3_out)
+        p3_out = self.conv3_up(self.swish((weight[0] * p3_in) + (weight[1] * self.p3_upsample(p4_up))))
         if self.first_time:
             p4_in = self.p4_down_channel_2(p4)
-            p4_in = self.dequant(p4_in)
-            p4_in = self.quant(p4_in)
-            p5_in = self.p5_down_channel_2(p5)
-        p4_in = self.dequant(p4_in)
-        p4_up = self.dequant(p4_up)
-        p3_out = self.dequant(p3_out) 
-        p5_in = self.dequant(p5_in)
-        p5_up = self.dequant(p5_up)
-        p6_in = self.dequant(p6_in)
-        p6_up = self.dequant(p6_up)
-        p7_in = self.dequant(p7_in)
-        
+            p5_in = self.p5_down_channel_2(p5)      
         # Weights for P4_0, P4_1 and P3_2 to P4_2
         p4_w2 = self.p4_w2_relu(self.p4_w2)
         weight = p4_w2 / (torch.sum(p4_w2, dim=0) + self.epsilon)
-        #weight = self.quant(weight)
         # Connections for P4_0, P4_1 and P3_2 to P4_2 respectively
         p4_out = self.conv4_down(self.swish((weight[0] * p4_in) + (weight[1] * p4_up) + (weight[2] * self.p4_downsample(p3_out))))
-        #p4_out = self.quant(p4_out)
-        # Weights for P5_0, P5_1 and P4_2 to P5_2
+         # Weights for P5_0, P5_1 and P4_2 to P5_2
         p5_w2 = self.p5_w2_relu(self.p5_w2)
         weight = p5_w2 / (torch.sum(p5_w2, dim=0) + self.epsilon)
-        #weight = self.quant(weight)
         # Connections for P5_0, P5_1 and P4_2 to P5_2 respectively
         p5_out = self.conv5_down(self.swish((weight[0] * p5_in) + (weight[1] * p5_up) + (weight[2] * self.p5_downsample(p4_out))))
-        #p5_out = self.quant(p5_out)
         # Weights for P6_0, P6_1 and P5_2 to P6_2
         p6_w2 = self.p6_w2_relu(self.p6_w2)
         weight = p6_w2 / (torch.sum(p6_w2, dim=0) + self.epsilon)
-        #weight = self.quant(weight)
         # Connections for P6_0, P6_1 and P5_2 to P6_2 respectively
         p6_out = self.conv6_down(
             self.swish((weight[0] * p6_in) + (weight[1] * p6_up) + (weight[2] * self.p6_downsample(p5_out))))
-        #p6_out = self.quant(p6_out)
         # Weights for P7_0 and P6_2 to P7_2
         p7_w2 = self.p7_w2_relu(self.p7_w2)
         weight = p7_w2 / (torch.sum(p7_w2, dim=0) + self.epsilon)
-        #weight = self.quant(weight)
         # Connections for P7_0 and P6_2 to P7_2
         p7_out = self.conv7_down(self.swish((weight[0] * p7_in) + (weight[1] * self.p7_downsample(p6_out))))
-        p7_out = self.quant(p7_out)
-        p6_out = self.quant(p6_out)
-        p5_out = self.quant(p5_out)
-        p4_out = self.quant(p4_out)
-        p3_out = self.quant(p3_out)
         return p3_out, p4_out, p5_out, p6_out, p7_out
 
     def _forward(self, inputs):
@@ -414,7 +360,6 @@ class Regressor(nn.Module):
         feats = []
         for feat, bn_list in zip(inputs, self.bn_list):
             for i, bn, conv in zip(range(self.num_layers), bn_list, self.conv_list):
-                feat = self.dequant(feat)
                 feat = conv(feat)
                 feat = bn(feat)
                 feat = self.swish(feat)
@@ -458,7 +403,6 @@ class QAT_Classifier(nn.Module):
         feats = []
         for feat, bn_list in zip(inputs, self.bn_list):
             for i, bn, conv in zip(range(self.num_layers), bn_list, self.conv_list):
-                feat=self.dequant(feat)
                 feat = conv(feat)
                 feat = bn(feat)
                 feat = self.swish(feat)
@@ -468,8 +412,6 @@ class QAT_Classifier(nn.Module):
             feat = feat.contiguous().view(feat.shape[0], feat.shape[1], feat.shape[2], self.num_anchors,
                                           self.num_classes)
             feat = feat.contiguous().view(feat.shape[0], -1, self.num_classes)
-            feat=self.dequant(feat)
-
             feats.append(feat)
 
         feats = torch.cat(feats, dim=1)
@@ -499,12 +441,9 @@ class EfficientNet(nn.Module):
         
 
 
-    def forward(self, x):
-        
+    def forward(self, x): 
         x = self.model._conv_stem(x)
-        x = self.quant(x) 
-        x = self.model._bn0(x)
-        x = self.dequant(x)               
+        x = self.model._bn0(x)              
         x = self.model._swish(x)
         
         
@@ -519,7 +458,6 @@ class EfficientNet(nn.Module):
             if drop_connect_rate:
                 drop_connect_rate *= float(idx) / len(self.model._blocks)
             x = block(x, drop_connect_rate=drop_connect_rate)
-            x = self.dequant(x)
             if block._depthwise_conv.stride == [2, 2]:
                 feature_maps.append(last_x)
             elif idx == len(self.model._blocks) - 1:
