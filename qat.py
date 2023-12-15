@@ -381,7 +381,6 @@ def traininig_loop(model):
                     # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
         optimizer.step()   
         
-        save_checkpoint(qat_model, f'efficientdet-d{0}_QAT_{epoch}_{step}.pth')
     return
 
 def save_checkpoint(model, name):
