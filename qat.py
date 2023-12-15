@@ -18,7 +18,7 @@ from torch.autograd import Variable
 
 from efficientdet.dataset import CocoDataset, Resizer, Normalizer, Augmenter, collater
 from efficientdet.utils import BBoxTransform, ClipBoxes
-from utils.utils import preprocess, invert_affine, postprocess, boolean_string ,boolean_string ,get_last_weights
+from utils.utils import preprocess, invert_affine, postprocess, boolean_string ,boolean_string ,get_last_weights,CustomDataParallel
 from efficientnet import EfficientNet 
 from efficientnet.utils import MemoryEfficientSwish, Swish
 from efficientdet.loss import FocalLoss
@@ -150,7 +150,6 @@ class EfficientDetBackbone(nn.Module):
         regression = self.regressor(features)
         classification = self.classifier(features)
         anchors = self.anchors(inputs, inputs.dtype)
-
         return features , regression, classification, anchors 
         
     def fuse_model(self, is_qat=False):
@@ -158,15 +157,15 @@ class EfficientDetBackbone(nn.Module):
 
         for m in self.bifpn.modules():
             if type(m) == SeparableConvBlock:
-                fuse_modules(m, ['depthwise_conv','pointwise_conv','bn','swish'], inplace=True)      
+                fuse_modules(m, ['conv','bn'], inplace=True)      
         
         for m in self.regressor.modules():
             if type(m) == SeparableConvBlock:
-                fuse_modules(m, ['depthwise_conv','pointwise_conv','bn','swish'], inplace=True)
+                fuse_modules(m, ['conv','bn'], inplace=True)
 
         for m in self.classifier.modules():
             if type(m) == SeparableConvBlock:
-                fuse_modules(m, ['depthwise_conv','pointwise_conv','bn','swish'], inplace=True)
+                fuse_modules(m, ['conv','bn'], inplace=True)
 
     def init_backbone(self, path):
         state_dict = torch.load(path)
@@ -289,7 +288,7 @@ class Params:
 def load_model(model_file):
     params = Params(f'/content/QAT_ED_PyTorch/projects/coco.yml')
     model = EfficientDetBackbone(num_classes=len(params.obj_list),compound_coef=0,ratios=eval(params.anchors_ratios), scales=eval(params.anchors_scales))
-    model.load_state_dict(torch.load(model_file, map_location=torch.device('cpu')))
+    model.load_state_dict(torch.load(model_file, map_location=torch.device('cpu')),strict=False)
 
     model.requires_grad_(False)
     return model
@@ -380,7 +379,7 @@ def traininig_loop(model):
         loss.backward()
                     # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
         optimizer.step()   
-        
+                
     return
 
 def save_checkpoint(model, name):
@@ -419,11 +418,11 @@ def main():
     print("Size of baseline model")
     print_size_of_model(float_model)
 
-    if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
-      evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, float_model)
+    # if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
+    #   evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, float_model)
     
 
-    _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')  
+    # _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')  
 
 #<-------------------QAT----------------------------->
 
@@ -435,24 +434,24 @@ def main():
 
 # QAT takes time and one needs to train over a few epochs.
 # Train and check accuracy after each epoch
-    for nepoch in range(5): #default nepoch = 500 
-        traininig_loop(qat_model)        
-        if nepoch > 3: #If default nepoch > 188
-            qat_model.apply(torch.ao.quantization.disable_observer)
-        if nepoch > 2: # if default nepoch > 125
-            qat_model.apply(torch.nn.intrinsic.qat.freeze_bn_stats)
+    # for nepoch in range(5): #default nepoch = 500 
+    #     traininig_loop(qat_model)        
+    #     if nepoch > 3: #If default nepoch > 188
+    #         qat_model.apply(torch.ao.quantization.disable_observer)
+    #     if nepoch > 2: # if default nepoch > 125
+    #         qat_model.apply(torch.nn.intrinsic.qat.freeze_bn_stats)
     
-        quantized_model = torch.ao.quantization.convert(qat_model.eval(), inplace=True)
-        quantized_model.eval()
+    quantized_model = torch.ao.quantization.convert(qat_model.eval(), inplace=True)
+    quantized_model.eval()
 
-        print_size_of_model(qat_model)
-        if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
-            evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, qat_model)
-            
+    print_size_of_model(qat_model)
+    if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
+        evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, qat_model)
+        
 
-        _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
+    _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
 
-     save_checkpoint(qat_model, scripted_quantized_model_file)
+    save_checkpoint(qat_model, scripted_quantized_model_file)
 if __name__ == "__main__":
     main()
 
