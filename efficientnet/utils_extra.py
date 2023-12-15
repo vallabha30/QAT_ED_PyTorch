@@ -6,81 +6,6 @@ from torch import nn
 import torch.nn.functional as F
 from torch.ao.quantization import QuantStub, DeQuantStub
 
-class SwishImplementation(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, i):      
-        result = i * torch.sigmoid(i)
-        ctx.save_for_backward(i)      
-        return result
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        i = ctx.saved_variables[0]
-        sigmoid_i = torch.sigmoid(i)
-        return grad_output * (sigmoid_i * (1 + i * (1 - sigmoid_i)))
-
-class MemoryEfficientSwish(nn.Module):
-     def __init__(self):
-        super().__init__()
-        self.quant = torch.ao.quantization.QuantStub()
-        self.dequant = torch.ao.quantization.DeQuantStub()
-     def forward(self, x):
-        x=self.quant(x)
-        # x=self.dequant(x)
-        return SwishImplementation.apply(x)
-
-
-class Swish(nn.Module):
-  def __init__(self):
-        super().__init__()
-        self.quant = torch.ao.quantization.QuantStub()
-  def forward(self, x):
-        # x=self.quant(x)
-        return x * torch.sigmoid(x)
-
-class SeparableConvBlock(nn.Module):
-    """
-    created by Zylo117
-    """
-
-    def __init__(self, in_channels, out_channels=None, norm=True, activation=False, onnx_export=False):
-        super(SeparableConvBlock, self).__init__()
-        if out_channels is None:
-            out_channels = in_channels
-
-        # Q: whether separate conv
-        #  share bias between depthwise_conv and pointwise_conv
-        #  or just pointwise_conv apply bias.
-        # A: Confirmed, just pointwise_conv applies bias, depthwise_conv has no bias.
-        self.quant=QuantStub()
-        self.depthwise_conv = Conv2dStaticSamePadding(in_channels, in_channels,
-                                                      kernel_size=3, stride=1, groups=in_channels, bias=False)
-        self.pointwise_conv = Conv2dStaticSamePadding(in_channels, out_channels, kernel_size=1, stride=1)
-
-        self.norm = norm
-        if self.norm:
-            # Warning: pytorch momentum is different from tensorflow's, momentum_pytorch = 1 - momentum_tensorflow
-            self.bn=Bn2dWrapper(num_features=out_channels, momentum=0.01, eps=1e-3)
-
-        self.activation = activation
-        if self.activation:
-            self.swish = MemoryEfficientSwish() if not onnx_export else Swish()
-        self.dequant=DeQuantStub()
-        
-
-    def forward(self, x):
-        x = self.quant(x)
-        x = self.depthwise_conv(x)
-        x = self.pointwise_conv(x)
-
-        if self.norm:
-            x = self.bn(x)
-
-        if self.activation:
-            x = self.swish(x)
-        # x=self.dequant(x)
-        return x
-
 class Conv2dStaticSamePadding(nn.Module):
     """
     created by Zylo117
@@ -107,8 +32,7 @@ class Conv2dStaticSamePadding(nn.Module):
         elif len(self.kernel_size) == 1:
             self.kernel_size = [self.kernel_size[0]] * 2
 
-    def forward(self, x):
-        #x = self.quant(x)       
+    def forward(self, x):   
         h, w = x.shape[-2:]
         
         extra_h = (math.ceil(w / self.stride[1]) - 1) * self.stride[1] - w + self.kernel_size[1]
@@ -120,7 +44,6 @@ class Conv2dStaticSamePadding(nn.Module):
         bottom = extra_v - top
 
         x = F.pad(x, [left, right, top, bottom])
-        x = self.dequant(x)
         x = self.quant(x)
         x = self.conv(x)
         x = self.dequant(x)
@@ -163,7 +86,6 @@ class MaxPool2dStaticSamePadding(nn.Module):
         bottom = extra_v - top
 
         x = F.pad(x, [left, right, top, bottom])
-        x = self.dequant(x)
         x = self.quant(x)
         x = self.pool(x)
         x = self.dequant(x)
@@ -174,23 +96,66 @@ class Bn2dWrapper(nn.Module):
     def __init__(self, num_features, momentum=0.01, eps=1e-3):  
         super().__init__()
         self.quant = torch.ao.quantization.QuantStub()
+        self.dequant = torch.ao.quantization.DeQuantStub()
         self.bn = nn.BatchNorm2d(num_features, momentum=momentum, eps=eps) 
 
     def forward(self, x):
         
         x = self.quant(x)
         x = self.bn(x)
+        x = self.dequant(x)
         return x
 
 
-# class Conv6Wrapper(nn.Module): 
-#   def __init__(self,num_channels, onnx_export=False):
-#     super().__init__()
-#     self.quant = torch.ao.quantization.QuantStub()
-#     self.conv=conv6_up(num_channels, onnx_export=False)
+class UpsampleWrap(nn.Module):
+  def __init__(self, scale_factor=2, mode='nearest'):  
+        super().__init__()
+        self.quant = torch.ao.quantization.QuantStub()
+        self.dequant = torch.ao.quantization.DeQuantStub()
+        self.up = nn.Upsample(scale_factor=scale_factor, mode=mode) 
 
-#   def forward(self,x):
-#     x=self.quant(x)
-#     x=self.conv(x)
+  def forward(self, x):
+      
+      x = self.quant(x)
+      x = self.up(x)
+      x = self.dequant(x)
+      return x
 
-#     return x
+class ParameterWrap(nn.Module):
+  def __init__(self,abcd=torch.ones(2, dtype=torch.float32) ,requires_grad=True):  
+        super().__init__()
+        self.quant = QuantStub()
+        self.dequant = DeQuantStub()
+        self.param = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=requires_grad)
+  def forward(self, x):
+      
+      x = self.quant(x)
+      x = self.param(x)
+      x = self.dequant(x)
+      return x
+
+class ReluWrap(nn.Module):
+  def __init__(self):  
+        super().__init__()
+        self.quant = torch.ao.quantization.QuantStub()
+        self.dequant = torch.ao.quantization.DeQuantStub()
+        self.relu= nn.ReLU()
+  def forward(self, x):
+      
+      x = self.quant(x)
+      x = self.relu(x)
+      x = self.dequant(x)
+      return x
+
+class ModuleListWrap(nn.Module):
+  def __init__(self):  
+        super().__init__()
+        self.quant = torch.ao.quantization.QuantStub()
+        self.dequant = torch.ao.quantization.DeQuantStub()
+        self.Mlist= nn.ModuleList([])
+  def forward(self, x):
+      
+      x = self.quant(x)
+      x = self.Mlist(x)
+      x = self.dequant(x)
+      return x
