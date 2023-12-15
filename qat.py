@@ -386,9 +386,9 @@ def traininig_loop(model):
 
 def save_checkpoint(model, name):
     if isinstance(model, CustomDataParallel):
-        torch.save(model.module.model.state_dict(), os.path.join('logs/', name))
+        torch.save(model.module.state_dict(), os.path.join('logs/', name))
     else:
-        torch.save(model.model.state_dict(), os.path.join('logs/', name))
+        torch.save(model.state_dict(), os.path.join('logs/', name))
 
 #<---------DEFINE DATASET AND DATALOADERS----------->
 
