@@ -16,6 +16,7 @@ class Conv2dStaticSamePadding(nn.Module):
         super().__init__()
         self.quant = torch.ao.quantization.QuantStub()
         self.dequant = torch.ao.quantization.DeQuantStub()
+        self.qconfig = torch.ao.quantization.get_default_qat_qconfig('x86')
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride,
                               bias=bias, groups=groups)
         self.stride = self.conv.stride
@@ -60,6 +61,7 @@ class MaxPool2dStaticSamePadding(nn.Module):
         super().__init__()
         self.quant = torch.ao.quantization.QuantStub()
         self.dequant = torch.ao.quantization.DeQuantStub()
+        self.qconfig = torch.ao.quantization.get_default_qat_qconfig('x86')
         self.pool = nn.MaxPool2d(*args, **kwargs)
         self.stride = self.pool.stride
         self.kernel_size = self.pool.kernel_size
@@ -97,6 +99,7 @@ class Bn2dWrapper(nn.Module):
         super().__init__()
         self.quant = torch.ao.quantization.QuantStub()
         self.dequant = torch.ao.quantization.DeQuantStub()
+        self.qconfig = torch.ao.quantization.get_default_qat_qconfig('x86')
         self.bn = nn.BatchNorm2d(num_features, momentum=momentum, eps=eps) 
 
     def forward(self, x):
@@ -112,6 +115,7 @@ class UpsampleWrap(nn.Module):
         super().__init__()
         self.quant = torch.ao.quantization.QuantStub()
         self.dequant = torch.ao.quantization.DeQuantStub()
+        self.qconfig = torch.ao.quantization.get_default_qat_qconfig('x86')
         self.up = nn.Upsample(scale_factor=scale_factor, mode=mode) 
 
   def forward(self, x):
@@ -126,6 +130,7 @@ class ParameterWrap(nn.Module):
         super().__init__()
         self.quant = QuantStub()
         self.dequant = DeQuantStub()
+        self.qconfig = torch.ao.quantization.get_default_qat_qconfig('x86')
         self.param = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=requires_grad)
   def forward(self, x):
       
@@ -139,6 +144,7 @@ class ReluWrap(nn.Module):
         super().__init__()
         self.quant = torch.ao.quantization.QuantStub()
         self.dequant = torch.ao.quantization.DeQuantStub()
+        self.qconfig = torch.ao.quantization.get_default_qat_qconfig('x86')
         self.relu= nn.ReLU()
   def forward(self, x):
       
@@ -152,6 +158,7 @@ class ModuleListWrap(nn.Module):
         super().__init__()
         self.quant = torch.ao.quantization.QuantStub()
         self.dequant = torch.ao.quantization.DeQuantStub()
+        self.qconfig = torch.ao.quantization.get_default_qat_qconfig('x86')
         self.Mlist= nn.ModuleList([])
   def forward(self, x):
       
