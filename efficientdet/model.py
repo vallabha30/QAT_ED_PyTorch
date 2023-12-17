@@ -104,7 +104,7 @@ class BiFPN(nn.Module):
         self.p6_downsample = MaxPool2dStaticSamePadding(3, 2)
         self.p7_downsample = MaxPool2dStaticSamePadding(3, 2)
         if use_p8:
-            self.p7_upsample = nn.Upsample(scale_factor=2, mode='nearest')
+            self.p7_upsample = UpsampleWrap(scale_factor=2, mode='nearest')
             self.p8_downsample = MaxPool2dStaticSamePadding(3, 2)
 
         self.swish = MemoryEfficientSwish() if not onnx_export else Swish()
