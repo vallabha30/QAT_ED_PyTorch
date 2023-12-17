@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from efficientnet.utils_extra import Conv2dStaticSamePadding, MaxPool2dStaticSamePadding, Bn2dWrapper, UpsampleWrap, ParameterWrap,ReluWrap ,ModuleListWrap
+from efficientnet.utils_extra import Bn2dWrapper
 from .utils import (
     round_filters,
     round_repeats,
@@ -30,6 +30,7 @@ class MBConvBlock(nn.Module):
         super().__init__()
         self.quant = torch.ao.quantization.QuantStub()
         self.dequant = torch.ao.quantization.DeQuantStub()
+        self.qconfig = torch.ao.quantization.get_default_qat_qconfig('x86')
         self._block_args = block_args
         self._bn_mom = 1 - global_params.batch_norm_momentum
         self._bn_eps = global_params.batch_norm_epsilon
@@ -80,6 +81,7 @@ class MBConvBlock(nn.Module):
             x = self._expand_conv(inputs)
             x = self._bn0(x)
             x = self._swish(x)
+
 
         x = self._depthwise_conv(x)
         x = self._bn1(x)
@@ -132,6 +134,7 @@ class EfficientNet(nn.Module):
         self._blocks_args = blocks_args
         self.quant = torch.ao.quantization.QuantStub()
         self.dequant = torch.ao.quantization.DeQuantStub()
+        self.qconfig = torch.ao.quantization.get_default_qat_qconfig('x86')
         # Get static or dynamic convolution depending on image size
         Conv2d = get_same_padding_conv2d(image_size=global_params.image_size)
 
@@ -208,8 +211,12 @@ class EfficientNet(nn.Module):
         # Pooling and final linear layer
         x= self.quant(x)
         x = self._avg_pooling(x)
+        x= self.dequant(x)
         x = x.view(bs, -1)
+        x= self.quant(x)
         x = self._dropout(x)
+        x= self.dequant(x)
+        x= self.quant(x)
         x = self._fc(x)
         x= self.dequant(x)
         return x
