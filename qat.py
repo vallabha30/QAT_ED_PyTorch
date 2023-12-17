@@ -193,9 +193,9 @@ gpu = args.device
 use_float16 = args.float16
 override_prev_results = args.override
 project_name = args.project
-weights_path = f'/content/QAT_ED_PyTorch/weights/efficientdet-d0_updated' if args.weights is None else args.weights
+weights_path = f'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/weights/finally_updated_d0_model_weights.pth' if args.weights is None else args.weights
 
-params = yaml.safe_load(open(f'/content/QAT_ED_PyTorch/projects/coco.yml'))
+params = yaml.safe_load(open(f'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/projects/coco.yml'))
 obj_list = params['obj_list']
 
 input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
@@ -278,13 +278,13 @@ def _eval(coco_gt, image_ids, pred_json_path):
 
 class Params:
     def __init__(self, project_file):
-        self.params = yaml.safe_load(open('/content/QAT_ED_PyTorch/projects/coco.yml').read())
+        self.params = yaml.safe_load(open('D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/projects/coco.yml').read())
 
     def __getattr__(self, item):
         return self.params.get(item, None)
   
 def load_model(model_file):
-    params = Params(f'/content/QAT_ED_PyTorch/projects/coco.yml')
+    params = Params(f'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/projects/coco.yml')
     model = EfficientDetBackbone(num_classes=len(params.obj_list),compound_coef=0,ratios=eval(params.anchors_ratios), scales=eval(params.anchors_scales))
     model.load_state_dict(torch.load(model_file, map_location=torch.device('cpu')),strict=False)
 
@@ -314,7 +314,7 @@ class ModelWithLoss(nn.Module):
 
 def traininig_loop(model):
     model.train()
-    params = Params(f'/content/QAT_ED_PyTorch/projects/coco.yml')
+    params = Params(f'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/projects/coco.yml')
     training_params = {'batch_size': 12,
                        'shuffle': True,
                        'drop_last': True,
@@ -328,13 +328,13 @@ def traininig_loop(model):
                   'num_workers': 4}
 
     input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
-    training_set = CocoDataset(root_dir=os.path.join('/content/QAT_ED_PyTorch/datasets/', 'coco'), set=params.train_set,
+    training_set = CocoDataset(root_dir=os.path.join('D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/datasets/', 'coco'), set=params.train_set,
                                transform=transforms.Compose([Normalizer(mean=params.mean, std=params.std),
                                                              Augmenter(),
                                                              Resizer(input_sizes[0])]))
     training_generator = DataLoader(training_set, **training_params)
 
-    val_set = CocoDataset(root_dir=os.path.join('/content/QAT_ED_PyTorch/datasets/', params.project_name), set=params.val_set,
+    val_set = CocoDataset(root_dir=os.path.join('D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/datasets/', params.project_name), set=params.val_set,
                           transform=transforms.Compose([Normalizer(mean=params.mean, std=params.std),
                                                         Resizer(input_sizes[0])]))
     val_generator = DataLoader(val_set, **val_params)
@@ -355,7 +355,7 @@ def traininig_loop(model):
 
     model = ModelWithLoss(model, debug=False)
        
-    optim='adamw'
+    optim='SGD'
     if optim == 'adamw':
             optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
     else:
@@ -382,21 +382,21 @@ def traininig_loop(model):
 
 def save_checkpoint(model, name):
     if isinstance(model, CustomDataParallel):
-        torch.save(model.module.state_dict(), os.path.join('/content/QAT_ED_PyTorch/weights/', name))
+        torch.save(model.module.state_dict(), os.path.join('logs/', name))
     else:
-        torch.save(model.state_dict(), os.path.join('/content/QAT_ED_PyTorch/weights/', name))
+        torch.save(model.state_dict(), os.path.join('logs/', name))
 
 #<---------DEFINE DATASET AND DATALOADERS----------->
 
 
 def main():
 
-    saved_model_dir = '/content/QAT_ED_PyTorch/weights/'
-    float_model_file = 'efficientdet-d0_updated'
+    saved_model_dir = 'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/weights/'
+    float_model_file = 'finally_updated_d0_model_weights.pth'
     scripted_quantized_model_file = 'Efficientdet-d0-qat.pth'
     SET_NAME = params['val_set']
-    VAL_GT = f'/content/QAT_ED_PyTorch/datasets/coco/annotations/instances_val2017.json'
-    VAL_IMGS = f'/content/QAT_ED_PyTorch/datasets/coco/val2017/'
+    VAL_GT = f'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/datasets/coco/annotations/instances_val2017.json'
+    VAL_IMGS = f'D:/QAT/EfficientDet/Yet-Another-EfficientDet-Pytorch/datasets/coco/val2017/'
     MAX_IMAGES = 100 #default= 10000
     coco_gt = COCO(VAL_GT)
     image_ids = coco_gt.getImgIds()[:MAX_IMAGES]
@@ -416,11 +416,11 @@ def main():
     print("Size of baseline model")
     print_size_of_model(float_model)
 
-    # if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
-    #   evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, float_model)
+    if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
+      evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, float_model)
     
 
-    # _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')  
+    _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')  
 
 #<-------------------QAT----------------------------->
 
@@ -432,24 +432,24 @@ def main():
 
 # QAT takes time and one needs to train over a few epochs.
 # Train and check accuracy after each epoch
-    for nepoch in range(500): #default nepoch = 500 
+    for nepoch in range(8): #default nepoch = 500 
         traininig_loop(qat_model)        
-        if nepoch > 188: #If default nepoch > 188
+        if nepoch > 3: #If default nepoch > 188
             qat_model.apply(torch.ao.quantization.disable_observer)
-        if nepoch > 125: # if default nepoch > 125
+        if nepoch > 2: # if default nepoch > 125
             qat_model.apply(torch.nn.intrinsic.qat.freeze_bn_stats)
     
         quantized_model = torch.ao.quantization.convert(qat_model.eval(), inplace=True)
         quantized_model.eval()
-    
+
         print_size_of_model(qat_model)
         if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
             evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, qat_model)
             
-    
+
         _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
-    
-        save_checkpoint(qat_model, scripted_quantized_model_file)
+
+    save_checkpoint(qat_model, scripted_quantized_model_file)
 if __name__ == "__main__":
     main()
 
