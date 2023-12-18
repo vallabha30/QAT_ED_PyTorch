@@ -5,7 +5,7 @@ from torch.ao.quantization import QuantStub, DeQuantStub
 
 from efficientnet import EfficientNet as EffNet
 from efficientnet.utils import MemoryEfficientSwish, Swish
-from efficientnet.utils_extra import Conv2dStaticSamePadding, MaxPool2dStaticSamePadding, Bn2dWrapper, UpsampleWrap, ParameterWrap
+from efficientnet.utils_extra import Conv2dStaticSamePadding,ReluWrap, MaxPool2dStaticSamePadding, Bn2dWrapper, UpsampleWrap, ParameterWrap
 
 
 def nms(dets, thresh):
@@ -148,22 +148,22 @@ class BiFPN(nn.Module):
 
         # Weight
         self.p6_w1 =nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
-        self.p6_w1_relu = nn.ReLU()
+        self.p6_w1_relu = ReluWrap()
         self.p5_w1 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
-        self.p5_w1_relu = nn.ReLU()
+        self.p5_w1_relu = ReluWrap()
         self.p4_w1 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
-        self.p4_w1_relu = nn.ReLU()
+        self.p4_w1_relu = ReluWrap()
         self.p3_w1 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
-        self.p3_w1_relu = nn.ReLU()
+        self.p3_w1_relu = ReluWrap()
 
         self.p4_w2 = nn.Parameter(torch.ones(3, dtype=torch.float32), requires_grad=True)
-        self.p4_w2_relu = nn.ReLU()
+        self.p4_w2_relu = ReluWrap()
         self.p5_w2 = nn.Parameter(torch.ones(3, dtype=torch.float32), requires_grad=True)
-        self.p5_w2_relu = nn.ReLU()
+        self.p5_w2_relu = ReluWrap()
         self.p6_w2 = nn.Parameter(torch.ones(3, dtype=torch.float32), requires_grad=True)
-        self.p6_w2_relu = nn.ReLU()
+        self.p6_w2_relu = ReluWrap()
         self.p7_w2 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
-        self.p7_w2_relu = nn.ReLU()
+        self.p7_w2_relu = ReluWrap()
 
         self.attention = attention
 
