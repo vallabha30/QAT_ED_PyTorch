@@ -286,7 +286,7 @@ class Params:
 def load_model(model_file):
     params = Params(f'/content/QAT_ED_PyTorch/projects/coco.yml')
     model = EfficientDetBackbone(num_classes=len(params.obj_list),compound_coef=0,ratios=eval(params.anchors_ratios), scales=eval(params.anchors_scales))
-    model.load_state_dict(torch.load(model_file, map_location=torch.device('cpu')),strict=False)
+    model.load_state_dict(torch.load(model_file, map_location=torch.device('cpu')))
 
     model.requires_grad_(False)
     return model
