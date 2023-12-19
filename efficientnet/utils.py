@@ -50,23 +50,12 @@ class SwishImplementation(torch.autograd.Function):
 
 
 class MemoryEfficientSwish(nn.Module):
-     def __init__(self):
-        super().__init__()
-        self.quant = torch.ao.quantization.QuantStub()
-        self.dequant = torch.ao.quantization.DeQuantStub()
-     def forward(self, x):
-        x=self.dequant(x)
-        x=self.quant(x)
-        x=self.dequant(x)
+    def forward(self, x):
         return SwishImplementation.apply(x)
 
 
 class Swish(nn.Module):
-  def __init__(self):
-        super().__init__()
-        self.quant = torch.ao.quantization.QuantStub()
-  def forward(self, x):
-        x=self.quant(x)
+    def forward(self, x):
         return x * torch.sigmoid(x)
 
 
